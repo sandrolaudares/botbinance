@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot - Binance</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Binance Trading Bot</h1>
+            <div class="mode-badge paper">PAPER TRADING</div>
+        </header>
+
+        <!-- Portfolio Summary -->
+        <section class="card portfolio-card">
+            <h2>💰 Portfólio</h2>
+            <div class="portfolio-grid">
+                <div class="stat">
+                    <span class="stat-label">Saldo Total</span>
+                    <span class="stat-value" id="total-balance">R$ 0,00</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Disponível</span>
+                    <span class="stat-value" id="available-brl">R$ 0,00</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Em Posições</span>
+                    <span class="stat-value" id="positions-value">R$ 0,00</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">P&L Total</span>
+                    <span class="stat-value" id="total-pnl">R$ 0,00</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Strategy Tabs -->
+        <div class="tabs">
+            <button class="tab active" data-tab="grid">Grid Trading</button>
+            <button class="tab" data-tab="dca">DCA</button>
+            <button class="tab" data-tab="auto-invest">Auto-Invest</button>
+            <button class="tab" data-tab="market">Mercado</button>
+            <button class="tab" data-tab="trades">Histórico</button>
+        </div>
+
+        <!-- Grid Trading Tab -->
+        <section class="tab-content active" id="tab-grid">
+            <div class="card">
+                <h3>Configurar Grid Trading</h3>
+                <form id="grid-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Par (ex: BTCBRL)</label>
+                            <input type="text" id="grid-symbol" value="BTCBRL" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Investimento (BRL)</label>
+                            <input type="number" id="grid-investment" value="500" step="10" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Preço Superior</label>
+                            <input type="number" id="grid-upper" value="0" step="0.01" placeholder="Auto">
+                        </div>
+                        <div class="form-group">
+                            <label>Preço Inferior</label>
+                            <input type="number" id="grid-lower" value="0" step="0.01" placeholder="Auto">
+                        </div>
+                        <div class="form-group">
+                            <label>Níveis</label>
+                            <input type="number" id="grid-levels" value="10" min="3" max="50">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Ativar Grid</button>
+                </form>
+            </div>
+            <div class="card">
+                <h3>Grids Ativos</h3>
+                <div id="grid-status" class="status-container">
+                    <p class="empty-state">Nenhum grid ativo</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- DCA Tab -->
+        <section class="tab-content" id="tab-dca">
+            <div class="card">
+                <h3>Configurar DCA</h3>
+                <form id="dca-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Par (ex: BTCBRL)</label>
+                            <input type="text" id="dca-symbol" value="BTCBRL" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Valor por Compra (BRL)</label>
+                            <input type="number" id="dca-amount" value="50" step="10" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Intervalo (minutos)</label>
+                            <input type="number" id="dca-interval" value="60" min="1" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Ativar DCA</button>
+                </form>
+            </div>
+            <div class="card">
+                <h3>Planos DCA Ativos</h3>
+                <div id="dca-status" class="status-container">
+                    <p class="empty-state">Nenhum plano DCA ativo</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Auto-Invest Tab -->
+        <section class="tab-content" id="tab-auto-invest">
+            <div class="card">
+                <h3>Configurar Auto-Invest</h3>
+                <form id="auto-invest-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Top N Moedas</label>
+                            <input type="number" id="ai-topn" value="5" min="1" max="20">
+                        </div>
+                        <div class="form-group">
+                            <label>Investimento Total (BRL)</label>
+                            <input type="number" id="ai-investment" value="500" step="50">
+                        </div>
+                        <div class="form-group">
+                            <label>Rebalancear (horas)</label>
+                            <input type="number" id="ai-rebalance" value="4" min="1">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Ativar Auto-Invest</button>
+                    <button type="button" class="btn btn-secondary" id="btn-rebalance">Rebalancear Agora</button>
+                    <button type="button" class="btn btn-secondary" id="btn-scan">Escanear Mercado</button>
+                </form>
+            </div>
+            <div class="card">
+                <h3>Status Auto-Invest</h3>
+                <div id="auto-invest-status" class="status-container">
+                    <p class="empty-state">Auto-Invest não configurado</p>
+                </div>
+            </div>
+            <div class="card">
+                <h3>Análise de Mercado</h3>
+                <div id="market-analysis" class="status-container">
+                    <p class="empty-state">Clique em "Escanear Mercado" para analisar</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Market Tab -->
+        <section class="tab-content" id="tab-market">
+            <div class="card">
+                <h3>Top Pares BRL por Volume</h3>
+                <button class="btn btn-secondary" id="btn-refresh-market">Atualizar</button>
+                <div id="market-pairs" class="status-container">
+                    <p class="empty-state">Carregando...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Trades Tab -->
+        <section class="tab-content" id="tab-trades">
+            <div class="card">
+                <h3>Histórico de Trades</h3>
+                <div class="stats-row" id="trade-stats"></div>
+                <div id="trades-list" class="status-container">
+                    <p class="empty-state">Nenhum trade realizado</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Positions -->
+        <section class="card" id="positions-section">
+            <h3>Posições Abertas</h3>
+            <div id="positions-list">
+                <p class="empty-state">Nenhuma posição aberta</p>
+            </div>
+        </section>
+
+        <!-- Controls -->
+        <section class="card controls">
+            <button class="btn btn-danger" id="btn-reset">Resetar Conta</button>
+        </section>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
