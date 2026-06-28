@@ -85,7 +85,7 @@ class GridTradingStrategy:
                     price=current_price,
                 )
                 if trade:
-                    level["filled"] = True
+                    level["filled"] = False
                     level["side"] = OrderSide.SELL  # Flip to sell
                     executed_trades.append(trade)
                     logger.info(f"Grid BUY {symbol} at {current_price:.2f}")
@@ -107,7 +107,7 @@ class GridTradingStrategy:
                             price=current_price,
                         )
                         if trade:
-                            level["filled"] = True
+                            level["filled"] = False
                             level["side"] = OrderSide.BUY  # Flip to buy
                             executed_trades.append(trade)
                             logger.info(f"Grid SELL {symbol} at {current_price:.2f}")

@@ -159,7 +159,7 @@ class MarketAnalyzer:
                 score += 5
 
         # Bollinger Bands component
-        if bb is not None:
+        if bb is not None and bb["upper"] != bb["lower"]:
             price_position = (bb["current"] - bb["lower"]) / (bb["upper"] - bb["lower"])
             if price_position < 0.2:
                 score += 15  # Near lower band - potential bounce

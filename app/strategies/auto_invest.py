@@ -163,6 +163,9 @@ class AutoInvestStrategy:
 
     async def take_profit(self, min_profit_percent: float = 2.0) -> list[Trade]:
         """Take profit on positions that exceeded target."""
+        # Refresh positions with current prices before checking PnL
+        await paper_engine.get_portfolio()
+
         trades = []
         for symbol, pos in list(paper_engine.positions.items()):
             if pos.strategy != StrategyType.AUTO_INVEST:
