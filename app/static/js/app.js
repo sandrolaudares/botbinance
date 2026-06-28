@@ -406,11 +406,52 @@ function initEventListeners() {
     });
 }
 
+// ========== Trading Mode ==========
+
+async function updateTradingMode() {
+    const data = await apiCall('/api/mode');
+    if (!data) return;
+    
+    const badge = document.getElementById('trading-mode-badge');
+    if (badge) {
+        if (data.is_live) {
+            badge.textContent = 'LIVE TRADING';
+            badge.className = 'badge live';
+        } else {
+            badge.textContent = 'PAPER TRADING';
+            badge.className = 'badge paper';
+        }
+    }
+}
+
+async function toggleTradingMode() {
+    const data = await apiCall('/api/mode');
+    if (!data) return;
+    
+    if (data.is_live) {
+        if (confirm('Deseja voltar para o modo PAPER TRADING (simulação)?')) {
+            await apiCall('/api/mode/paper', 'POST');
+        }
+    } else {
+        if (!data.has_credentials) {
+            alert('API Key da Binance não configurada. Configure as variáveis BINANCE_API_KEY e BINANCE_API_SECRET.');
+            return;
+        }
+        if (confirm('ATENÇÃO: Isso vai ativar trading com DINHEIRO REAL na sua conta Binance. Continuar?')) {
+            await apiCall('/api/mode/live', 'POST');
+        }
+    }
+    updateTradingMode();
+    updatePortfolio();
+}
+
 // ========== Auto-refresh ==========
 
 function startAutoRefresh() {
     updatePortfolio();
+    updateTradingMode();
     setInterval(updatePortfolio, 15000); // Every 15s
+    setInterval(updateTradingMode, 30000); // Every 30s
 }
 
 // ========== Initialize ==========

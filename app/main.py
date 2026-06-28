@@ -13,6 +13,7 @@ from app.models.trading import AutoInvestConfig, DCAConfig, GridConfig
 from app.services.binance_client import binance_client
 from app.services.market_analysis import market_analyzer
 from app.services.paper_trading import paper_engine
+from app.services.trading_engine import trading_engine
 from app.strategies.auto_invest import auto_invest_strategy
 from app.strategies.dca import dca_strategy
 from app.strategies.grid_trading import grid_strategy
@@ -93,28 +94,55 @@ async def dashboard(request: Request):
 @app.get("/api/portfolio")
 async def get_portfolio():
     """Get current portfolio state."""
-    portfolio = await paper_engine.get_portfolio()
+    portfolio = await trading_engine.get_portfolio()
     return portfolio.model_dump()
 
 
 @app.get("/api/trades")
 async def get_trades(limit: int = 50):
     """Get trade history."""
-    trades = paper_engine.get_trade_history(limit)
+    trades = trading_engine.get_trade_history(limit)
     return [t.model_dump() for t in trades]
 
 
 @app.get("/api/stats")
 async def get_stats():
     """Get trading statistics."""
-    return paper_engine.get_stats()
+    return trading_engine.get_stats()
 
 
 @app.post("/api/reset")
 async def reset_account():
     """Reset paper trading account."""
-    paper_engine.reset()
+    trading_engine.reset()
     return {"message": "Account reset", "balance_brl": paper_engine.balance_brl}
+
+
+@app.get("/api/mode")
+async def get_trading_mode():
+    """Get current trading mode info."""
+    return {
+        "paper_trading": settings.paper_trading,
+        "has_credentials": binance_client.has_credentials,
+        "is_live": trading_engine.is_live,
+        "testnet": settings.binance_testnet,
+    }
+
+
+@app.post("/api/mode/live")
+async def enable_live_trading():
+    """Enable live trading (requires API credentials)."""
+    if not binance_client.has_credentials:
+        return {"error": "No API credentials configured", "status": "error"}
+    settings.paper_trading = False
+    return {"message": "Live trading enabled", "is_live": True}
+
+
+@app.post("/api/mode/paper")
+async def enable_paper_trading():
+    """Switch back to paper trading."""
+    settings.paper_trading = True
+    return {"message": "Paper trading enabled", "is_live": False}
 
 
 # ---- Grid Trading API ----

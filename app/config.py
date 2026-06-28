@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     # Binance API
     binance_api_key: str = ""
     binance_api_secret: str = ""
-    binance_testnet: bool = True  # Use testnet by default
+    binance_testnet: bool = False  # Use real API when keys are provided
 
     # Trading
     paper_trading: bool = True  # Paper trading enabled by default
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    model_config = {"env_prefix": "BOT_", "env_file": ".env"}
+    model_config = {"env_file": ".env"}
 
 
 settings = Settings()

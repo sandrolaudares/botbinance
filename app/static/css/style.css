@@ -44,7 +44,7 @@ header h1 {
     font-size: 1.5rem;
 }
 
-.mode-badge {
+.mode-badge, .badge {
     padding: 4px 12px;
     border-radius: 20px;
     font-size: 0.75rem;
@@ -52,10 +52,22 @@ header h1 {
     text-transform: uppercase;
 }
 
-.mode-badge.paper {
+.mode-badge.paper, .badge.paper {
     background: rgba(210, 153, 34, 0.2);
     color: var(--yellow);
     border: 1px solid var(--yellow);
+}
+
+.badge.live {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--green);
+    border: 1px solid var(--green);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
 }
 
 .card {

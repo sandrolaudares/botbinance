@@ -1,6 +1,10 @@
 import asyncio
+import hashlib
+import hmac
 import logging
+import time
 from typing import Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -13,11 +17,28 @@ BINANCE_TESTNET_URL = "https://testnet.binance.vision"
 
 
 class BinanceClient:
-    """Client for Binance API - fetches market data."""
+    """Client for Binance API - fetches market data and executes orders."""
 
     def __init__(self):
         self.base_url = BINANCE_TESTNET_URL if settings.binance_testnet else BINANCE_BASE_URL
         self._client: Optional[httpx.AsyncClient] = None
+
+    @property
+    def has_credentials(self) -> bool:
+        """Check if API credentials are configured."""
+        return bool(settings.binance_api_key and settings.binance_api_secret)
+
+    def _sign_params(self, params: dict) -> dict:
+        """Sign request parameters with HMAC-SHA256."""
+        params["timestamp"] = int(time.time() * 1000)
+        query_string = urlencode(params)
+        signature = hmac.HMAC(
+            settings.binance_api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        params["signature"] = signature
+        return params
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -31,6 +52,8 @@ class BinanceClient:
     async def close(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+
+    # ========== Market Data (Public) ==========
 
     async def get_ticker_price(self, symbol: str) -> Optional[float]:
         """Get current price for a symbol."""
@@ -129,6 +152,148 @@ class BinanceClient:
             if isinstance(result, float):
                 prices[symbol] = result
         return prices
+
+    # ========== Account (Authenticated) ==========
+
+    async def get_account_info(self) -> Optional[dict]:
+        """Get account information including balances."""
+        if not self.has_credentials:
+            return None
+        try:
+            client = await self._get_client()
+            params = self._sign_params({})
+            response = await client.get("/api/v3/account", params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error fetching account info: {e}")
+            return None
+
+    async def get_brl_balance(self) -> Optional[float]:
+        """Get BRL balance from account."""
+        account = await self.get_account_info()
+        if not account:
+            return None
+        for balance in account.get("balances", []):
+            if balance["asset"] == "BRL":
+                return float(balance["free"])
+        return 0.0
+
+    async def get_asset_balance(self, asset: str) -> Optional[float]:
+        """Get balance of a specific asset."""
+        account = await self.get_account_info()
+        if not account:
+            return None
+        for balance in account.get("balances", []):
+            if balance["asset"] == asset:
+                return float(balance["free"])
+        return 0.0
+
+    # ========== Trading (Authenticated) ==========
+
+    async def place_market_order(
+        self, symbol: str, side: str, quote_order_qty: Optional[float] = None,
+        quantity: Optional[float] = None
+    ) -> Optional[dict]:
+        """Place a market order on Binance.
+
+        Args:
+            symbol: Trading pair (e.g., BTCBRL)
+            side: BUY or SELL
+            quote_order_qty: Amount in quote currency (BRL) for BUY orders
+            quantity: Amount in base currency for SELL orders
+        """
+        if not self.has_credentials:
+            logger.error("Cannot place real order: no API credentials")
+            return None
+
+        try:
+            client = await self._get_client()
+            params = {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+            }
+            if quote_order_qty is not None:
+                params["quoteOrderQty"] = f"{quote_order_qty:.2f}"
+            elif quantity is not None:
+                params["quantity"] = f"{quantity:.8f}"
+            else:
+                logger.error("Must specify either quote_order_qty or quantity")
+                return None
+
+            params = self._sign_params(params)
+            response = await client.post("/api/v3/order", params=params)
+            response.raise_for_status()
+            order = response.json()
+            logger.info(
+                f"Order placed: {side} {symbol} - "
+                f"Status: {order.get('status')}, "
+                f"Filled: {order.get('executedQty')} @ avg {order.get('cummulativeQuoteQty')}"
+            )
+            return order
+        except Exception as e:
+            logger.error(f"Error placing order {side} {symbol}: {e}")
+            return None
+
+    async def place_limit_order(
+        self, symbol: str, side: str, quantity: float, price: float,
+        time_in_force: str = "GTC"
+    ) -> Optional[dict]:
+        """Place a limit order on Binance."""
+        if not self.has_credentials:
+            logger.error("Cannot place real order: no API credentials")
+            return None
+
+        try:
+            client = await self._get_client()
+            params = {
+                "symbol": symbol,
+                "side": side,
+                "type": "LIMIT",
+                "timeInForce": time_in_force,
+                "quantity": f"{quantity:.8f}",
+                "price": f"{price:.2f}",
+            }
+            params = self._sign_params(params)
+            response = await client.post("/api/v3/order", params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error placing limit order {side} {symbol}: {e}")
+            return None
+
+    async def get_open_orders(self, symbol: Optional[str] = None) -> list[dict]:
+        """Get open orders."""
+        if not self.has_credentials:
+            return []
+        try:
+            client = await self._get_client()
+            params = {}
+            if symbol:
+                params["symbol"] = symbol
+            params = self._sign_params(params)
+            response = await client.get("/api/v3/openOrders", params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error fetching open orders: {e}")
+            return []
+
+    async def get_my_trades(self, symbol: str, limit: int = 50) -> list[dict]:
+        """Get recent trades for a symbol."""
+        if not self.has_credentials:
+            return []
+        try:
+            client = await self._get_client()
+            params = {"symbol": symbol, "limit": limit}
+            params = self._sign_params(params)
+            response = await client.get("/api/v3/myTrades", params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error fetching trades for {symbol}: {e}")
+            return []
 
 
 binance_client = BinanceClient()

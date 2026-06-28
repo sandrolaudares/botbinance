@@ -7,6 +7,7 @@ from app.models.trading import AutoInvestConfig, MarketAnalysis, StrategyType, T
 from app.services.binance_client import binance_client
 from app.services.market_analysis import market_analyzer
 from app.services.paper_trading import paper_engine
+from app.services.trading_engine import trading_engine
 
 logger = logging.getLogger(__name__)
 
@@ -118,26 +119,33 @@ class AutoInvestStrategy:
         trades = []
         investment = self.config.total_investment_brl
 
-        # First, sell positions that are no longer in allocations
-        for symbol in list(paper_engine.positions.keys()):
-            pos = paper_engine.positions[symbol]
-            if pos.strategy == StrategyType.AUTO_INVEST and symbol not in allocations:
-                trade = await paper_engine.sell_position(
-                    symbol, percentage=1.0, strategy=StrategyType.AUTO_INVEST
-                )
-                if trade:
-                    trades.append(trade)
-                    logger.info(f"Auto-Invest: sold {symbol} (no longer in top picks)")
+        # First, sell positions that are no longer in allocations (paper mode only)
+        if not trading_engine.is_live:
+            for symbol in list(paper_engine.positions.keys()):
+                pos = paper_engine.positions[symbol]
+                if pos.strategy == StrategyType.AUTO_INVEST and symbol not in allocations:
+                    trade = await paper_engine.sell_position(
+                        symbol, percentage=1.0, strategy=StrategyType.AUTO_INVEST
+                    )
+                    if trade:
+                        trades.append(trade)
+                        logger.info(f"Auto-Invest: sold {symbol} (no longer in top picks)")
+
+        # Determine available balance
+        if trading_engine.is_live:
+            brl_balance = await binance_client.get_brl_balance()
+            available = min(brl_balance or 0, investment)
+        else:
+            available = min(paper_engine.balance_brl, investment)
 
         # Buy according to new allocations
-        available = min(paper_engine.balance_brl, investment)
         for symbol, pct in allocations.items():
             amount = available * (pct / 100)
             if amount < 10:  # Minimum BRL amount
                 continue
 
-            # Check if we already have a position
-            if symbol in paper_engine.positions:
+            # Check if we already have a position (paper mode)
+            if not trading_engine.is_live and symbol in paper_engine.positions:
                 pos = paper_engine.positions[symbol]
                 if pos.strategy == StrategyType.AUTO_INVEST:
                     current_value = pos.quantity * pos.current_price
@@ -145,7 +153,7 @@ class AutoInvestStrategy:
                     if abs(current_value - target_value) / target_value < 0.1:
                         continue  # Within 10% of target, skip
 
-            trade = await paper_engine.buy_with_brl(
+            trade = await trading_engine.buy_with_brl(
                 symbol=symbol,
                 amount_brl=amount,
                 strategy=StrategyType.AUTO_INVEST,
