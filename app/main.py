@@ -17,6 +17,7 @@ from app.services.trading_engine import trading_engine
 from app.strategies.auto_invest import auto_invest_strategy
 from app.strategies.dca import dca_strategy
 from app.strategies.grid_trading import grid_strategy
+from app.strategies.scalping import ScalpConfig, scalping_strategy
 from app.strategies.smart_trade import SmartTradeConfig, smart_trade_strategy
 
 logging.basicConfig(
@@ -51,6 +52,11 @@ async def scheduled_smart_trade_monitor():
     await smart_trade_strategy.monitor_positions()
 
 
+async def scheduled_scalping_cycle():
+    """Run scalping cycle: detect new listings + monitor positions."""
+    await scalping_strategy.run_cycle()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -64,6 +70,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_auto_invest, "interval", minutes=15, id="auto_invest")
     scheduler.add_job(
         scheduled_smart_trade_monitor, "interval", seconds=30, id="smart_trade"
+    )
+    scheduler.add_job(
+        scheduled_scalping_cycle, "interval", seconds=60, id="scalping"
     )
     scheduler.start()
 
@@ -364,3 +373,61 @@ async def close_all_smart_trades():
     """Close all active Smart Trades."""
     closed = await smart_trade_strategy.close_all()
     return {"status": "closed", "trades_closed": closed}
+
+
+# ---- Scalping (New Coin Listings) ----
+
+
+@app.post("/api/scalping/activate")
+async def activate_scalping(config: ScalpConfig):
+    """Activate the new coin scalping strategy."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+    config.active = True
+    await scalping_strategy.setup(config)
+    return {
+        "status": "activated",
+        "config": config.model_dump(),
+        "known_pairs": len(scalping_strategy.known_brl_pairs),
+    }
+
+
+@app.post("/api/scalping/deactivate")
+async def deactivate_scalping():
+    """Deactivate scalping strategy."""
+    if scalping_strategy.config:
+        scalping_strategy.config.active = False
+    return {"status": "deactivated"}
+
+
+@app.get("/api/scalping/status")
+async def get_scalping_status():
+    """Get scalping strategy status and positions."""
+    active_positions = scalping_strategy.get_active_positions()
+    closed_positions = scalping_strategy.get_closed_positions()
+    return {
+        "active": bool(
+            scalping_strategy.config and scalping_strategy.config.active
+        ),
+        "known_pairs": len(scalping_strategy.known_brl_pairs),
+        "active_positions": len(active_positions),
+        "closed_positions": len(closed_positions),
+        "positions": [p.model_dump() for p in active_positions],
+        "history": [p.model_dump() for p in closed_positions[-10:]],
+    }
+
+
+@app.post("/api/scalping/{position_id}/close")
+async def close_scalp_position(position_id: str):
+    """Close a specific scalping position."""
+    result = await scalping_strategy.close_position_by_id(position_id)
+    if result:
+        return {"status": "closed", "position": result}
+    return {"error": "Position not found", "status": "error"}
+
+
+@app.post("/api/scalping/close-all")
+async def close_all_scalp_positions():
+    """Close all scalping positions."""
+    closed = await scalping_strategy.close_all()
+    return {"status": "closed", "positions_closed": closed}

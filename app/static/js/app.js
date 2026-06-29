@@ -477,12 +477,94 @@ async function closeAllSmartTrades() {
     updateSmartTradeStatus();
 }
 
+// ========== Scalping ==========
+
+async function activateScalping(e) {
+    e.preventDefault();
+    const config = {
+        active: true,
+        amount_per_trade_brl: parseFloat(document.getElementById('scalp-amount').value),
+        take_profit_percent: parseFloat(document.getElementById('scalp-tp').value),
+        trailing_percent: parseFloat(document.getElementById('scalp-trail').value),
+        stop_loss_percent: parseFloat(document.getElementById('scalp-sl').value),
+        max_hold_hours: parseInt(document.getElementById('scalp-hours').value),
+        max_concurrent_trades: parseInt(document.getElementById('scalp-max').value),
+    };
+    const result = await apiCall('/api/scalping/activate', 'POST', config);
+    if (result && result.status === 'activated') {
+        document.getElementById('btn-activate-scalp').style.display = 'none';
+        document.getElementById('btn-deactivate-scalp').style.display = 'inline-block';
+        updateScalpingStatus();
+    }
+}
+
+async function deactivateScalping() {
+    await apiCall('/api/scalping/deactivate', 'POST');
+    document.getElementById('btn-activate-scalp').style.display = 'inline-block';
+    document.getElementById('btn-deactivate-scalp').style.display = 'none';
+    document.getElementById('scalping-status').innerHTML = '<p>Scalping desativado</p>';
+}
+
+async function updateScalpingStatus() {
+    const data = await apiCall('/api/scalping/status');
+    if (!data) return;
+
+    const statusEl = document.getElementById('scalping-status');
+    const posEl = document.getElementById('scalping-positions');
+
+    if (data.active) {
+        document.getElementById('btn-activate-scalp').style.display = 'none';
+        document.getElementById('btn-deactivate-scalp').style.display = 'inline-block';
+        statusEl.innerHTML = `<p><strong>ATIVO</strong> | Pares monitorados: ${data.known_pairs} | Posições abertas: ${data.active_positions}</p>`;
+    } else {
+        statusEl.innerHTML = '<p>Scalping desativado</p>';
+    }
+
+    if (data.positions && data.positions.length > 0) {
+        let html = '<table class="data-table"><thead><tr><th>Par</th><th>Entrada</th><th>Status</th><th>TP/Trail</th><th>Peak</th><th>Ação</th></tr></thead><tbody>';
+        for (const pos of data.positions) {
+            const trailing = pos.trailing_active ? 'TRAILING' : 'Monitorando';
+            html += `<tr>
+                <td>${pos.symbol}</td>
+                <td>R$${pos.entry_price.toFixed(4)}</td>
+                <td>${trailing}</td>
+                <td>+${pos.take_profit_percent || 15}%</td>
+                <td>R$${pos.highest_price.toFixed(4)}</td>
+                <td><button class="btn btn-small btn-danger" onclick="closeScalpPosition('${pos.id}')">Fechar</button></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        posEl.innerHTML = html;
+    } else {
+        posEl.innerHTML = data.active ? '<p>Aguardando novas listagens...</p>' : '';
+    }
+
+    if (data.history && data.history.length > 0) {
+        let hist = '<h4 style="margin-top:10px">Histórico</h4><table class="data-table"><thead><tr><th>Par</th><th>PnL</th><th>Motivo</th></tr></thead><tbody>';
+        for (const h of data.history) {
+            const pnl = h.pnl_percent != null ? `${h.pnl_percent.toFixed(2)}%` : '-';
+            const cls = (h.pnl_percent || 0) >= 0 ? 'profit' : 'loss';
+            hist += `<tr><td>${h.symbol}</td><td class="${cls}">${pnl}</td><td>${h.reason}</td></tr>`;
+        }
+        hist += '</tbody></table>';
+        posEl.innerHTML += hist;
+    }
+}
+
+async function closeScalpPosition(posId) {
+    if (!confirm('Fechar esta posição de scalping?')) return;
+    await apiCall(`/api/scalping/${posId}/close`, 'POST');
+    updateScalpingStatus();
+}
+
 // ========== Event Listeners ==========
 
 function initEventListeners() {
     document.getElementById('smart-trade-form').addEventListener('submit', createSmartTrade);
     document.getElementById('btn-auto-smart').addEventListener('click', autoSmartTrades);
     document.getElementById('btn-close-all-st').addEventListener('click', closeAllSmartTrades);
+    document.getElementById('scalping-form').addEventListener('submit', activateScalping);
+    document.getElementById('btn-deactivate-scalp').addEventListener('click', deactivateScalping);
     document.getElementById('grid-form').addEventListener('submit', setupGrid);
     document.getElementById('dca-form').addEventListener('submit', setupDCA);
     document.getElementById('auto-invest-form').addEventListener('submit', setupAutoInvest);
@@ -553,4 +635,5 @@ document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
     startAutoRefresh();
     updateSmartTradeStatus();
+    updateScalpingStatus();
 });
