@@ -83,112 +83,6 @@ function updatePositions(positions) {
     }).join('');
 }
 
-// ========== Grid Trading ==========
-
-async function setupGrid(e) {
-    e.preventDefault();
-    const data = {
-        symbol: document.getElementById('grid-symbol').value.toUpperCase(),
-        upper_price: parseFloat(document.getElementById('grid-upper').value) || 0,
-        lower_price: parseFloat(document.getElementById('grid-lower').value) || 0,
-        levels: parseInt(document.getElementById('grid-levels').value),
-        investment_brl: parseFloat(document.getElementById('grid-investment').value),
-    };
-    
-    const result = await apiCall('/api/grid/setup', 'POST', data);
-    if (result) {
-        alert(`Grid configurado: ${result.message}`);
-        updateGridStatus();
-    }
-}
-
-async function updateGridStatus() {
-    const data = await apiCall('/api/grid/status');
-    const container = document.getElementById('grid-status');
-    
-    if (!data || data.length === 0) {
-        container.innerHTML = '<p class="empty-state">Nenhum grid ativo</p>';
-        return;
-    }
-
-    container.innerHTML = `
-        <table>
-            <thead>
-                <tr><th>Par</th><th>Faixa</th><th>Níveis</th><th>Preenchidos</th><th>Investimento</th><th>Ação</th></tr>
-            </thead>
-            <tbody>
-                ${data.map(g => `
-                    <tr>
-                        <td><strong>${g.symbol}</strong></td>
-                        <td>${formatBRL(g.lower_price)} - ${formatBRL(g.upper_price)}</td>
-                        <td>${g.total_levels}</td>
-                        <td>${g.filled_levels}/${g.total_levels}</td>
-                        <td>${formatBRL(g.investment_brl)}</td>
-                        <td><button class="btn btn-danger" onclick="removeGrid('${g.symbol}')">Remover</button></td>
-                    </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    `;
-}
-
-async function removeGrid(symbol) {
-    await apiCall(`/api/grid/${symbol}`, 'DELETE');
-    updateGridStatus();
-}
-
-// ========== DCA ==========
-
-async function setupDCA(e) {
-    e.preventDefault();
-    const data = {
-        symbol: document.getElementById('dca-symbol').value.toUpperCase(),
-        amount_brl: parseFloat(document.getElementById('dca-amount').value),
-        interval_minutes: parseInt(document.getElementById('dca-interval').value),
-    };
-    
-    const result = await apiCall('/api/dca/setup', 'POST', data);
-    if (result) {
-        alert(`DCA configurado: ${result.message}`);
-        updateDCAStatus();
-    }
-}
-
-async function updateDCAStatus() {
-    const data = await apiCall('/api/dca/status');
-    const container = document.getElementById('dca-status');
-    
-    if (!data || data.length === 0) {
-        container.innerHTML = '<p class="empty-state">Nenhum plano DCA ativo</p>';
-        return;
-    }
-
-    container.innerHTML = `
-        <table>
-            <thead>
-                <tr><th>Par</th><th>Valor</th><th>Intervalo</th><th>Execuções</th><th>Total Investido</th><th>Ação</th></tr>
-            </thead>
-            <tbody>
-                ${data.map(d => `
-                    <tr>
-                        <td><strong>${d.symbol}</strong></td>
-                        <td>${formatBRL(d.amount_brl)}</td>
-                        <td>${d.interval_minutes} min</td>
-                        <td>${d.total_executions}</td>
-                        <td>${formatBRL(d.total_invested_brl)}</td>
-                        <td><button class="btn btn-danger" onclick="removeDCA('${d.symbol}')">Remover</button></td>
-                    </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    `;
-}
-
-async function removeDCA(symbol) {
-    await apiCall(`/api/dca/${symbol}`, 'DELETE');
-    updateDCAStatus();
-}
-
 // ========== Auto-Invest ==========
 
 async function setupAutoInvest(e) {
@@ -549,6 +443,25 @@ async function updateScalpingStatus() {
         hist += '</tbody></table>';
         posEl.innerHTML += hist;
     }
+
+    // Activity log (real-time)
+    const logEl = document.getElementById('activity-log');
+    if (data.activity_log && data.activity_log.length > 0) {
+        let logHtml = '';
+        for (const entry of data.activity_log.slice().reverse()) {
+            const time = new Date(entry.time).toLocaleTimeString('pt-BR');
+            let color = '#aaa';
+            if (entry.action.includes('COMPRA')) color = '#4ecdc4';
+            else if (entry.action.includes('VENDA')) color = '#ff6b6b';
+            else if (entry.action.includes('MOMENTUM')) color = '#ffd93d';
+            else if (entry.action.includes('NOVA')) color = '#6bcb77';
+            else if (entry.action === 'SCAN') color = '#666';
+            logHtml += `<div style="margin-bottom:4px;color:${color}"><span style="color:#888">[${time}]</span> <strong>${entry.action}</strong> ${entry.symbol} <span style="color:#999">${entry.details}</span></div>`;
+        }
+        logEl.innerHTML = logHtml;
+    } else {
+        logEl.innerHTML = '<p style="color:#666">Aguardando atividade...</p>';
+    }
 }
 
 async function closeScalpPosition(posId) {
@@ -565,8 +478,6 @@ function initEventListeners() {
     document.getElementById('btn-close-all-st').addEventListener('click', closeAllSmartTrades);
     document.getElementById('scalping-form').addEventListener('submit', activateScalping);
     document.getElementById('btn-deactivate-scalp').addEventListener('click', deactivateScalping);
-    document.getElementById('grid-form').addEventListener('submit', setupGrid);
-    document.getElementById('dca-form').addEventListener('submit', setupDCA);
     document.getElementById('auto-invest-form').addEventListener('submit', setupAutoInvest);
     document.getElementById('btn-rebalance').addEventListener('click', triggerRebalance);
     document.getElementById('btn-scan').addEventListener('click', scanMarket);
@@ -626,6 +537,7 @@ function startAutoRefresh() {
     updateTradingMode();
     setInterval(updatePortfolio, 15000); // Every 15s
     setInterval(updateTradingMode, 30000); // Every 30s
+    setInterval(updateScalpingStatus, 10000); // Every 10s (real-time feed)
 }
 
 // ========== Initialize ==========

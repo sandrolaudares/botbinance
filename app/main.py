@@ -9,14 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
-from app.models.trading import AutoInvestConfig, DCAConfig, GridConfig
+from app.models.trading import AutoInvestConfig
 from app.services.binance_client import binance_client
 from app.services.market_analysis import market_analyzer
 from app.services.paper_trading import paper_engine
 from app.services.trading_engine import trading_engine
 from app.strategies.auto_invest import auto_invest_strategy
-from app.strategies.dca import dca_strategy
-from app.strategies.grid_trading import grid_strategy
 from app.strategies.scalping import ScalpConfig, scalping_strategy
 from app.strategies.smart_trade import SmartTradeConfig, smart_trade_strategy
 
@@ -27,17 +25,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
-
-
-async def scheduled_grid_check():
-    """Check all grid strategies periodically."""
-    for symbol in list(grid_strategy.active_grids.keys()):
-        await grid_strategy.check_and_execute(symbol)
-
-
-async def scheduled_dca_check():
-    """Check all DCA strategies periodically."""
-    await dca_strategy.execute_all()
 
 
 async def scheduled_auto_invest():
@@ -65,8 +52,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"Initial Balance: {settings.initial_balance_brl:.2f} BRL")
 
     # Start scheduler
-    scheduler.add_job(scheduled_grid_check, "interval", seconds=30, id="grid_check")
-    scheduler.add_job(scheduled_dca_check, "interval", minutes=1, id="dca_check")
     scheduler.add_job(scheduled_auto_invest, "interval", minutes=15, id="auto_invest")
     scheduler.add_job(
         scheduled_smart_trade_monitor, "interval", seconds=30, id="smart_trade"
@@ -161,56 +146,6 @@ async def enable_paper_trading():
     """Switch back to paper trading."""
     settings.paper_trading = True
     return {"message": "Paper trading enabled", "is_live": False}
-
-
-# ---- Grid Trading API ----
-
-
-@app.post("/api/grid/setup")
-async def setup_grid(config: GridConfig):
-    """Set up a new grid trading strategy."""
-    success = await grid_strategy.setup_grid(config)
-    if success:
-        return {"message": f"Grid setup for {config.symbol}", "status": "active"}
-    return {"message": "Failed to setup grid", "status": "error"}
-
-
-@app.delete("/api/grid/{symbol}")
-async def remove_grid(symbol: str):
-    """Remove a grid strategy."""
-    grid_strategy.remove_grid(symbol)
-    return {"message": f"Grid removed for {symbol}"}
-
-
-@app.get("/api/grid/status")
-async def get_grid_status():
-    """Get all grid strategies status."""
-    return grid_strategy.get_all_grids_status()
-
-
-# ---- DCA API ----
-
-
-@app.post("/api/dca/setup")
-async def setup_dca(config: DCAConfig):
-    """Set up a new DCA plan."""
-    success = dca_strategy.setup_dca(config)
-    if success:
-        return {"message": f"DCA setup for {config.symbol}", "status": "active"}
-    return {"message": "Failed to setup DCA", "status": "error"}
-
-
-@app.delete("/api/dca/{symbol}")
-async def remove_dca(symbol: str):
-    """Remove a DCA plan."""
-    dca_strategy.remove_dca(symbol)
-    return {"message": f"DCA removed for {symbol}"}
-
-
-@app.get("/api/dca/status")
-async def get_dca_status():
-    """Get all DCA plans status."""
-    return dca_strategy.get_all_dca_status()
 
 
 # ---- Auto-Invest API ----
@@ -414,6 +349,7 @@ async def get_scalping_status():
         "closed_positions": len(closed_positions),
         "positions": [p.model_dump() for p in active_positions],
         "history": [p.model_dump() for p in closed_positions[-10:]],
+        "activity_log": scalping_strategy.activity_log[-20:],
     }
 
 

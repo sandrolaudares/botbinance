@@ -70,6 +70,19 @@ class ScalpingStrategy:
         self.known_brl_pairs: set[str] = set()
         self.positions: list[ScalpPosition] = []
         self._initialized: bool = False
+        self.activity_log: list[dict] = []  # Real-time activity feed
+
+    def _log_activity(self, action: str, symbol: str, details: str = ""):
+        """Add entry to real-time activity log (keeps last 50)."""
+        entry = {
+            "time": datetime.now(UTC).isoformat(),
+            "action": action,
+            "symbol": symbol,
+            "details": details,
+        }
+        self.activity_log.append(entry)
+        if len(self.activity_log) > 50:
+            self.activity_log = self.activity_log[-50:]
 
     def get_active_positions(self) -> list[ScalpPosition]:
         return [p for p in self.positions if p.status == "ACTIVE"]
@@ -192,6 +205,11 @@ class ScalpingStrategy:
             f"qty={result.quantity:.8f}, "
             f"amount=R${self.config.amount_per_trade_brl:.2f}"
         )
+        self._log_activity(
+            "COMPRA (Nova Listagem)", symbol,
+            f"R${result.price:.4f} x {result.quantity:.6f} = "
+            f"R${self.config.amount_per_trade_brl:.2f}"
+        )
         return position.model_dump()
 
     async def monitor_positions(self):
@@ -285,6 +303,19 @@ class ScalpingStrategy:
                 f"Scalp CLOSED ({reason}): {pos.symbol} "
                 f"entry=R${pos.entry_price:.4f} exit=R${price:.4f} "
                 f"PnL={pos.pnl_percent:.2f}%"
+            )
+            reason_map = {
+                "TAKE_PROFIT": "VENDA (Take Profit)",
+                "STOP_LOSS": "VENDA (Stop Loss)",
+                "TIMEOUT": "VENDA (Timeout)",
+                "MANUAL": "VENDA (Manual)",
+                "MANUAL_ALL": "VENDA (Fechar Todos)",
+            }
+            self._log_activity(
+                reason_map.get(reason, f"VENDA ({reason})"),
+                pos.symbol,
+                f"PnL: {pos.pnl_percent:+.2f}% | "
+                f"R${pos.entry_price:.4f} → R${price:.4f}"
             )
         else:
             logger.error(f"Scalp: failed to sell {pos.symbol}")
@@ -435,6 +466,11 @@ class ScalpingStrategy:
             f"SCALP MOMENTUM BUY: {symbol} @ R${result.price:.4f}, "
             f"qty={result.quantity:.8f}, R${self.config.amount_per_trade_brl}"
         )
+        self._log_activity(
+            "COMPRA (Momentum)", symbol,
+            f"R${result.price:.4f} x {result.quantity:.6f} = "
+            f"R${self.config.amount_per_trade_brl:.2f}"
+        )
         return position.model_dump()
 
     async def run_cycle(self):
@@ -445,14 +481,32 @@ class ScalpingStrategy:
         if not self.config or not self.config.active:
             return
 
+        active_count = len(self.get_active_positions())
+        self._log_activity(
+            "SCAN", "mercado",
+            f"Buscando oportunidades... "
+            f"({active_count} posições ativas)"
+        )
+
         # Scan for new listings
         new_pairs = await self.scan_for_new_listings()
+        if new_pairs:
+            self._log_activity(
+                "NOVA LISTAGEM", ", ".join(new_pairs),
+                f"{len(new_pairs)} nova(s) moeda(s) detectada(s)!"
+            )
         for symbol in new_pairs:
             await self.execute_scalp(symbol)
 
         # Scan for momentum opportunities
         if self.config.momentum_enabled:
             momentum_symbols = await self.scan_momentum_opportunities()
+            if momentum_symbols:
+                self._log_activity(
+                    "MOMENTUM DETECTADO",
+                    ", ".join(momentum_symbols),
+                    "Sinal de alta identificado"
+                )
             for symbol in momentum_symbols:
                 await self.execute_momentum_scalp(symbol)
 

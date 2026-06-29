@@ -38,17 +38,15 @@
 
         <!-- Strategy Tabs -->
         <div class="tabs">
-            <button class="tab active" data-tab="smart-trade">Smart Trade</button>
-            <button class="tab" data-tab="scalping">Scalping</button>
-            <button class="tab" data-tab="grid">Grid Trading</button>
-            <button class="tab" data-tab="dca">DCA</button>
+            <button class="tab active" data-tab="scalping">Scalping</button>
+            <button class="tab" data-tab="smart-trade">Smart Trade</button>
             <button class="tab" data-tab="auto-invest">Auto-Invest</button>
             <button class="tab" data-tab="market">Mercado</button>
             <button class="tab" data-tab="trades">Histórico</button>
         </div>
 
         <!-- Smart Trade Tab -->
-        <section class="tab-content active" id="tab-smart-trade">
+        <section class="tab-content" id="tab-smart-trade">
             <div class="card">
                 <h3>Smart Trade</h3>
                 <p class="description">Crie trades inteligentes com Take Profit + Trailing Stop automáticos. Monitoramento contínuo a cada 30s.</p>
@@ -93,7 +91,7 @@
         </section>
 
         <!-- Scalping Tab -->
-        <section class="tab-content" id="tab-scalping">
+        <section class="tab-content active" id="tab-scalping">
             <div class="card">
                 <h3>Scalping Automático</h3>
                 <p class="description">Detecta novas listagens + moedas com momentum forte (alta de volume/preço) e compra automaticamente para lucro rápido.</p>
@@ -131,75 +129,9 @@
                 </form>
                 <div id="scalping-status" class="status-container" style="margin-top:15px"></div>
                 <div id="scalping-positions" style="margin-top:10px"></div>
-            </div>
-        </section>
-
-        <!-- Grid Trading Tab -->
-        <section class="tab-content" id="tab-grid">
-            <div class="card">
-                <h3>Configurar Grid Trading</h3>
-                <form id="grid-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Par (ex: BTCBRL)</label>
-                            <input type="text" id="grid-symbol" value="BTCBRL" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Investimento (BRL)</label>
-                            <input type="number" id="grid-investment" value="500" step="10" required>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Preço Superior</label>
-                            <input type="number" id="grid-upper" value="0" step="0.01" placeholder="Auto">
-                        </div>
-                        <div class="form-group">
-                            <label>Preço Inferior</label>
-                            <input type="number" id="grid-lower" value="0" step="0.01" placeholder="Auto">
-                        </div>
-                        <div class="form-group">
-                            <label>Níveis</label>
-                            <input type="number" id="grid-levels" value="10" min="3" max="50">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Ativar Grid</button>
-                </form>
-            </div>
-            <div class="card">
-                <h3>Grids Ativos</h3>
-                <div id="grid-status" class="status-container">
-                    <p class="empty-state">Nenhum grid ativo</p>
-                </div>
-            </div>
-        </section>
-
-        <!-- DCA Tab -->
-        <section class="tab-content" id="tab-dca">
-            <div class="card">
-                <h3>Configurar DCA</h3>
-                <form id="dca-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Par (ex: BTCBRL)</label>
-                            <input type="text" id="dca-symbol" value="BTCBRL" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Valor por Compra (BRL)</label>
-                            <input type="number" id="dca-amount" value="50" step="10" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Intervalo (minutos)</label>
-                            <input type="number" id="dca-interval" value="60" min="1" required>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Ativar DCA</button>
-                </form>
-            </div>
-            <div class="card">
-                <h3>Planos DCA Ativos</h3>
-                <div id="dca-status" class="status-container">
-                    <p class="empty-state">Nenhum plano DCA ativo</p>
+                <div id="scalping-activity" style="margin-top:15px">
+                    <h4>Atividade em Tempo Real</h4>
+                    <div id="activity-log" style="max-height:300px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
                 </div>
             </div>
         </section>
