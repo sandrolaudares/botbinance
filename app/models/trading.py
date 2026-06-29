@@ -26,6 +26,7 @@ class StrategyType(str, Enum):
     GRID = "GRID"
     DCA = "DCA"
     AUTO_INVEST = "AUTO_INVEST"
+    SMART_TRADE = "SMART_TRADE"
 
 
 class Trade(BaseModel):

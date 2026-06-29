@@ -17,6 +17,7 @@ from app.services.trading_engine import trading_engine
 from app.strategies.auto_invest import auto_invest_strategy
 from app.strategies.dca import dca_strategy
 from app.strategies.grid_trading import grid_strategy
+from app.strategies.smart_trade import SmartTradeConfig, smart_trade_strategy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,11 @@ async def scheduled_auto_invest():
         await auto_invest_strategy.rebalance()
 
 
+async def scheduled_smart_trade_monitor():
+    """Monitor Smart Trade positions for TP/SL triggers."""
+    await smart_trade_strategy.monitor_positions()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -56,6 +62,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_grid_check, "interval", seconds=30, id="grid_check")
     scheduler.add_job(scheduled_dca_check, "interval", minutes=1, id="dca_check")
     scheduler.add_job(scheduled_auto_invest, "interval", minutes=15, id="auto_invest")
+    scheduler.add_job(
+        scheduled_smart_trade_monitor, "interval", seconds=30, id="smart_trade"
+    )
     scheduler.start()
 
     yield
@@ -280,3 +289,78 @@ async def manual_sell(symbol: str, percentage: float = 1.0):
     if trade:
         return trade.model_dump()
     return {"error": "Sell failed"}
+
+
+# ---- Smart Trades (Take Profit + Trailing Stop) ----
+
+
+@app.post("/api/smart-trade/create")
+async def create_smart_trade(config: SmartTradeConfig):
+    """Create a Smart Trade with take-profit and trailing stop."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+    result = await smart_trade_strategy.create_trade(config)
+    if result:
+        return {"status": "created", "trade_id": result.get("id"), "trade": result}
+    return {"error": "Failed to create Smart Trade", "status": "error"}
+
+
+@app.post("/api/smart-trade/auto")
+async def auto_smart_trades(
+    total_amount_brl: float = 300,
+    top_n: int = 3,
+    take_profit_percent: float = 3.0,
+    trailing_percent: float = 1.0,
+    stop_loss_percent: float = 5.0,
+):
+    """Auto-create Smart Trades based on market analysis."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+    trades = await smart_trade_strategy.create_auto_trades(
+        total_amount_brl=total_amount_brl,
+        top_n=top_n,
+        take_profit_percent=take_profit_percent,
+        trailing_percent=trailing_percent,
+        stop_loss_percent=stop_loss_percent,
+    )
+    return {
+        "status": "created",
+        "trades_created": len(trades),
+        "trades": trades,
+    }
+
+
+@app.get("/api/smart-trade/active")
+async def get_active_smart_trades():
+    """Get all active Smart Trades."""
+    positions = smart_trade_strategy.get_active_positions()
+    return {
+        "active_trades": len(positions),
+        "trades": [p.model_dump() for p in positions],
+    }
+
+
+@app.get("/api/smart-trade/history")
+async def get_smart_trade_history():
+    """Get closed Smart Trades."""
+    closed = smart_trade_strategy.get_closed_positions()
+    return {
+        "closed_trades": len(closed),
+        "trades": [p.model_dump() for p in closed],
+    }
+
+
+@app.post("/api/smart-trade/{trade_id}/close")
+async def close_smart_trade(trade_id: str):
+    """Close a specific Smart Trade at market price."""
+    result = await smart_trade_strategy.close_position_by_id(trade_id)
+    if result:
+        return {"status": "closed", "trade": result}
+    return {"error": "Trade not found or already closed", "status": "error"}
+
+
+@app.post("/api/smart-trade/close-all")
+async def close_all_smart_trades():
+    """Close all active Smart Trades."""
+    closed = await smart_trade_strategy.close_all()
+    return {"status": "closed", "trades_closed": closed}

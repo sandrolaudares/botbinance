@@ -388,9 +388,101 @@ function initTabs() {
     });
 }
 
+// ========== Smart Trade (3Commas) ==========
+
+async function createSmartTrade(e) {
+    e.preventDefault();
+    const config = {
+        symbol: document.getElementById('st-symbol').value.toUpperCase(),
+        amount_brl: parseFloat(document.getElementById('st-amount').value),
+        take_profit_percent: parseFloat(document.getElementById('st-tp').value),
+        trailing_percent: parseFloat(document.getElementById('st-trail').value),
+        stop_loss_percent: parseFloat(document.getElementById('st-sl').value),
+        trailing_stop_loss: true,
+    };
+    const result = await apiCall('/api/smart-trade/create', 'POST', config);
+    if (result && result.status === 'created') {
+        alert(`Smart Trade criado! ID: ${result.trade_id}`);
+        updateSmartTradeStatus();
+    } else {
+        alert(`Erro: ${result?.error || 'Falha ao criar Smart Trade'}`);
+    }
+}
+
+async function autoSmartTrades() {
+    const amount = parseFloat(document.getElementById('st-amount').value) || 300;
+    const tp = parseFloat(document.getElementById('st-tp').value) || 3.0;
+    const trail = parseFloat(document.getElementById('st-trail').value) || 1.0;
+    const sl = parseFloat(document.getElementById('st-sl').value) || 5.0;
+    
+    const result = await apiCall(
+        `/api/smart-trade/auto?total_amount_brl=${amount}&top_n=3&take_profit_percent=${tp}&trailing_percent=${trail}&stop_loss_percent=${sl}`,
+        'POST'
+    );
+    if (result && result.trades_created > 0) {
+        alert(`${result.trades_created} Smart Trades criados automaticamente!`);
+        updateSmartTradeStatus();
+    } else {
+        alert(`Erro: ${result?.error || 'Nenhum trade criado (sem sinais de compra)'}`);
+    }
+}
+
+async function updateSmartTradeStatus() {
+    const data = await apiCall('/api/smart-trade/active');
+    const container = document.getElementById('smart-trade-status');
+    const closeAllBtn = document.getElementById('btn-close-all-st');
+    
+    if (!data || !data.trades || data.trades.length === 0) {
+        container.innerHTML = '<p class="empty-state">Nenhum Smart Trade ativo</p>';
+        closeAllBtn.style.display = 'none';
+        return;
+    }
+    
+    closeAllBtn.style.display = 'block';
+    let html = '<table class="data-table"><thead><tr><th>Par</th><th>Status</th><th>TP</th><th>SL</th><th>Lucro</th><th>Ação</th></tr></thead><tbody>';
+    
+    for (const trade of data.trades) {
+        const symbol = trade.symbol || '-';
+        const status = trade.status || '-';
+        const trailing = trade.trailing_active ? 'TRAILING' : 'Monitorando';
+        const pnl = trade.pnl_percent != null ? `${trade.pnl_percent.toFixed(2)}%` : '-';
+        const peak = trade.highest_price ? `${trade.highest_price.toFixed(2)}` : '-';
+        html += `<tr>
+            <td>${symbol}</td>
+            <td>${status} ${trade.trailing_active ? '🎯' : ''}</td>
+            <td>+${trade.take_profit_percent}% (${trailing})</td>
+            <td>-${trade.stop_loss_percent}%</td>
+            <td>Peak: R$${peak}</td>
+            <td><button class="btn btn-small btn-danger" onclick="closeSmartTrade('${trade.id}')">Fechar</button></td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+async function closeSmartTrade(tradeId) {
+    if (!confirm('Fechar este Smart Trade a preço de mercado?')) return;
+    const result = await apiCall(`/api/smart-trade/${tradeId}/close`, 'POST');
+    if (result && result.status === 'closed') {
+        updateSmartTradeStatus();
+    } else {
+        alert('Erro ao fechar trade');
+    }
+}
+
+async function closeAllSmartTrades() {
+    if (!confirm('Fechar TODOS os Smart Trades ativos?')) return;
+    const result = await apiCall('/api/smart-trade/close-all', 'POST');
+    alert(`${result?.trades_closed || 0} trades fechados`);
+    updateSmartTradeStatus();
+}
+
 // ========== Event Listeners ==========
 
 function initEventListeners() {
+    document.getElementById('smart-trade-form').addEventListener('submit', createSmartTrade);
+    document.getElementById('btn-auto-smart').addEventListener('click', autoSmartTrades);
+    document.getElementById('btn-close-all-st').addEventListener('click', closeAllSmartTrades);
     document.getElementById('grid-form').addEventListener('submit', setupGrid);
     document.getElementById('dca-form').addEventListener('submit', setupDCA);
     document.getElementById('auto-invest-form').addEventListener('submit', setupAutoInvest);
@@ -460,5 +552,5 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initEventListeners();
     startAutoRefresh();
-    updateGridStatus();
+    updateSmartTradeStatus();
 });

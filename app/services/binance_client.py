@@ -59,13 +59,19 @@ class BinanceClient:
         """Get current price for a symbol."""
         try:
             client = await self._get_client()
-            response = await client.get("/api/v3/ticker/price", params={"symbol": symbol})
+            response = await client.get(
+                "/api/v3/ticker/price", params={"symbol": symbol}
+            )
             response.raise_for_status()
             data = response.json()
             return float(data["price"])
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return None
+
+    async def get_symbol_price(self, symbol: str) -> Optional[float]:
+        """Alias for get_ticker_price."""
+        return await self.get_ticker_price(symbol)
 
     async def get_ticker_24h(self, symbol: Optional[str] = None) -> list[dict]:
         """Get 24h ticker stats."""
@@ -224,7 +230,13 @@ class BinanceClient:
 
             params = self._sign_params(params)
             response = await client.post("/api/v3/order", params=params)
-            response.raise_for_status()
+            if response.status_code != 200:
+                error_body = response.text
+                logger.error(
+                    f"Order rejected {side} {symbol}: "
+                    f"HTTP {response.status_code} - {error_body}"
+                )
+                return None
             order = response.json()
             logger.info(
                 f"Order placed: {side} {symbol} - "
