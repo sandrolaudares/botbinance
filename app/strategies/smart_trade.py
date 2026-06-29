@@ -101,6 +101,24 @@ class SmartTradeStrategy:
         )
         return position.model_dump()
 
+    async def _analyze_market(self) -> list:
+        """Analyze top BRL pairs for trading signals."""
+        from app.services.binance_client import binance_client as bc
+
+        top_pairs = await bc.get_top_brl_pairs_by_volume(top_n=15)
+        if not top_pairs:
+            return []
+
+        analyses = []
+        for ticker in top_pairs:
+            symbol = ticker["symbol"]
+            analysis = await market_analyzer.analyze_symbol(symbol)
+            if analysis:
+                analyses.append(analysis)
+
+        analyses.sort(key=lambda a: a.score, reverse=True)
+        return analyses
+
     async def create_auto_trades(
         self,
         total_amount_brl: float,
@@ -110,7 +128,7 @@ class SmartTradeStrategy:
         stop_loss_percent: float = 5.0,
     ) -> list[dict]:
         """Auto-create Smart Trades from market analysis."""
-        analyses = await market_analyzer.analyze_top_brl_pairs(top_n=10)
+        analyses = await self._analyze_market()
         if not analyses:
             logger.warning("No market analysis results")
             return []

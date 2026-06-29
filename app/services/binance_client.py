@@ -141,9 +141,16 @@ class BinanceClient:
         try:
             tickers = await self.get_ticker_24h()
             brl_tickers = [
-                t for t in tickers if t.get("symbol", "").endswith("BRL")
+                t for t in tickers
+                if t.get("symbol", "").endswith("BRL")
+                and not t.get("symbol", "").startswith("LD")
+                and "1MBB" not in t.get("symbol", "")
+                and "ETHW" not in t.get("symbol", "")
             ]
-            brl_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
+            brl_tickers.sort(
+                key=lambda x: float(x.get("quoteVolume", 0)),
+                reverse=True,
+            )
             return brl_tickers[:top_n]
         except Exception as e:
             logger.error(f"Error getting top BRL pairs: {e}")
