@@ -21,13 +21,19 @@ class ScalpConfig(BaseModel):
     """Configuration for the scalping strategy."""
 
     active: bool = False
-    amount_per_trade_brl: float = 100.0  # Amount to invest per new coin
-    take_profit_percent: float = 15.0  # Aggressive TP for new listings
+    amount_per_trade_brl: float = 100.0  # Amount to invest per trade
+    take_profit_percent: float = 15.0  # TP for new listings
     trailing_percent: float = 2.0  # Trailing deviation
     stop_loss_percent: float = 5.0  # Stop loss protection
     max_hold_hours: int = 4  # Force sell after X hours
     max_concurrent_trades: int = 5  # Max simultaneous scalp positions
     min_volume_24h: float = 50000.0  # Minimum 24h volume to enter
+    # Momentum scalping (active mode)
+    momentum_enabled: bool = True  # Also scalp momentum spikes
+    momentum_tp_percent: float = 5.0  # Tighter TP for momentum
+    momentum_sl_percent: float = 3.0  # Tighter SL for momentum
+    min_price_change_1h: float = 3.0  # Min 1h price change to trigger
+    min_volume_spike: float = 2.0  # Volume must be 2x average
 
 
 class ScalpPosition(BaseModel):
@@ -305,8 +311,112 @@ class ScalpingStrategy:
                 closed += 1
         return closed
 
+    async def scan_momentum_opportunities(self) -> list[str]:
+        """Find coins with sudden price/volume spikes for momentum scalping."""
+        if not self.config or not self.config.momentum_enabled:
+            return []
+
+        # Already at max positions?
+        active = self.get_active_positions()
+        if len(active) >= self.config.max_concurrent_trades:
+            return []
+
+        # Get all BRL tickers
+        tickers = await binance_client.get_ticker_24h()
+        if not tickers:
+            return []
+
+        # Filter BRL pairs with momentum signals
+        candidates = []
+        active_symbols = {p.symbol for p in active}
+
+        for t in tickers:
+            symbol = t.get("symbol", "")
+            if not symbol.endswith("BRL"):
+                continue
+            if symbol.startswith("LD") or "1MBB" in symbol:
+                continue
+            if symbol in active_symbols:
+                continue
+
+            try:
+                price_change = float(t.get("priceChangePercent", 0))
+                volume_24h = float(t.get("quoteVolume", 0))
+                # Use weighted avg price vs last price for recent momentum
+                weighted_avg = float(t.get("weightedAvgPrice", 0))
+                last_price = float(t.get("lastPrice", 0))
+            except (ValueError, TypeError):
+                continue
+
+            # Skip low volume pairs
+            if volume_24h < self.config.min_volume_24h:
+                continue
+
+            # Check momentum: price rising significantly
+            if price_change < self.config.min_price_change_1h:
+                continue
+
+            # Check that current price is above weighted average
+            # (confirms upward momentum, not just a spike that already reversed)
+            if weighted_avg > 0 and last_price > weighted_avg * 1.01:
+                candidates.append({
+                    "symbol": symbol,
+                    "change": price_change,
+                    "volume": volume_24h,
+                })
+
+        # Sort by price change (strongest momentum first)
+        candidates.sort(key=lambda x: x["change"], reverse=True)
+
+        # Take top candidates (leave room for max trades)
+        slots = self.config.max_concurrent_trades - len(active)
+        top = candidates[:min(slots, 2)]  # Max 2 momentum trades per cycle
+
+        if top:
+            symbols = [c["symbol"] for c in top]
+            desc = ", ".join(
+                f"{c['symbol']} +{c['change']:.1f}%" for c in top
+            )
+            logger.info(f"Scalp MOMENTUM signals: {desc}")
+            return symbols
+        return []
+
+    async def execute_momentum_scalp(self, symbol: str) -> Optional[dict]:
+        """Execute a momentum-based scalp with tighter TP/SL."""
+        if not self.config:
+            return None
+
+        active = self.get_active_positions()
+        if len(active) >= self.config.max_concurrent_trades:
+            return None
+
+        # Place market buy
+        result = await trading_engine.buy_with_brl(
+            symbol, self.config.amount_per_trade_brl, StrategyType.SMART_TRADE
+        )
+        if not result:
+            logger.error(f"Scalp momentum: failed to buy {symbol}")
+            return None
+
+        position = ScalpPosition(
+            id=f"scalp_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
+            symbol=symbol,
+            entry_price=result.price,
+            quantity=result.quantity,
+            amount_brl=self.config.amount_per_trade_brl,
+            highest_price=result.price,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        self.positions.append(position)
+
+        logger.info(
+            f"SCALP MOMENTUM BUY: {symbol} @ R${result.price:.4f}, "
+            f"qty={result.quantity:.8f}, R${self.config.amount_per_trade_brl}"
+        )
+        return position.model_dump()
+
     async def run_cycle(self):
-        """Run one full cycle: scan for new listings + monitor positions.
+        """Run one full cycle: scan + momentum + monitor positions.
 
         Called by the scheduler every 60 seconds.
         """
@@ -317,6 +427,12 @@ class ScalpingStrategy:
         new_pairs = await self.scan_for_new_listings()
         for symbol in new_pairs:
             await self.execute_scalp(symbol)
+
+        # Scan for momentum opportunities
+        if self.config.momentum_enabled:
+            momentum_symbols = await self.scan_momentum_opportunities()
+            for symbol in momentum_symbols:
+                await self.execute_momentum_scalp(symbol)
 
         # Monitor existing positions
         await self.monitor_positions()
