@@ -311,6 +311,23 @@ class ScalpingStrategy:
                 closed += 1
         return closed
 
+    async def _get_open_markets(self) -> set[str]:
+        """Get set of BRL symbols currently open for trading."""
+        try:
+            client = await binance_client._get_client()
+            response = await client.get("/api/v3/exchangeInfo")
+            response.raise_for_status()
+            data = response.json()
+            return {
+                s["symbol"] for s in data.get("symbols", [])
+                if s.get("quoteAsset") == "BRL"
+                and s.get("status") == "TRADING"
+                and not s.get("symbol", "").startswith("LD")
+            }
+        except Exception as e:
+            logger.error(f"Error fetching open markets: {e}")
+            return set()
+
     async def scan_momentum_opportunities(self) -> list[str]:
         """Find coins with sudden price/volume spikes for momentum scalping."""
         if not self.config or not self.config.momentum_enabled:
@@ -320,6 +337,9 @@ class ScalpingStrategy:
         active = self.get_active_positions()
         if len(active) >= self.config.max_concurrent_trades:
             return []
+
+        # Get open markets to avoid "Market is closed" errors
+        open_markets = await self._get_open_markets()
 
         # Get all BRL tickers
         tickers = await binance_client.get_ticker_24h()
@@ -337,6 +357,8 @@ class ScalpingStrategy:
             if symbol.startswith("LD") or "1MBB" in symbol:
                 continue
             if symbol in active_symbols:
+                continue
+            if symbol not in open_markets:
                 continue
 
             try:
