@@ -449,6 +449,9 @@ class ScalpingStrategy:
         )
         if not result:
             logger.error(f"Scalp momentum: failed to buy {symbol}")
+            self._log_activity(
+                "FALHA", symbol, "Mercado fechado ou ordem rejeitada"
+            )
             return None
 
         position = ScalpPosition(
