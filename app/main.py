@@ -328,10 +328,12 @@ async def convert_brl_to_usdt():
             "status": "error",
         }
 
+    # Use 99% of balance to avoid rounding/fee issues
+    amount = round(brl_balance * 0.99, 2)
     order = await binance_client.place_market_order(
         symbol="USDTBRL",
         side="BUY",
-        quote_order_qty=brl_balance,
+        quote_order_qty=amount,
     )
     if not order:
         return {"error": "Falha ao comprar USDT", "status": "error"}
