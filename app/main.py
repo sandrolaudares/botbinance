@@ -350,6 +350,41 @@ async def convert_brl_to_usdt():
     }
 
 
+@app.post("/api/sell-asset-for-usdt")
+async def sell_asset_for_usdt(asset: str):
+    """Sell all of an asset for USDT."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+
+    balance = await binance_client.get_asset_balance(asset.upper())
+    if balance is None or balance <= 0:
+        return {
+            "error": f"Sem saldo de {asset.upper()}",
+            "status": "error",
+        }
+
+    symbol = f"{asset.upper()}USDT"
+    order = await binance_client.place_market_order(
+        symbol=symbol,
+        side="SELL",
+        quantity=balance,
+    )
+    if not order:
+        return {"error": f"Falha ao vender {asset.upper()}", "status": "error"}
+
+    executed_qty = float(order.get("executedQty", 0))
+    cumulative_quote = float(order.get("cummulativeQuoteQty", 0))
+    usdt_balance = await binance_client.get_asset_balance("USDT")
+
+    return {
+        "status": "success",
+        "asset": asset.upper(),
+        "sold_qty": executed_qty,
+        "usdt_received": cumulative_quote,
+        "usdt_balance": usdt_balance,
+    }
+
+
 # ---- Scalping (New Coin Listings + Momentum) ----
 
 
