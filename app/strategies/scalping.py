@@ -27,7 +27,7 @@ class ScalpConfig(BaseModel):
     trailing_percent: float = 1.0  # Tight trailing
     stop_loss_percent: float = 2.0  # Quick exit on loss
     max_hold_hours: int = 2  # Short hold time
-    max_concurrent_trades: int = 10  # More simultaneous positions
+    max_concurrent_trades: int = 25  # More simultaneous positions
     min_volume_24h: float = 50000.0  # Min 24h volume in quote currency
     # Momentum scalping (aggressive mode)
     momentum_enabled: bool = True  # Scalp momentum spikes
