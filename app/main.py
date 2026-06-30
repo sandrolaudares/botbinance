@@ -353,6 +353,8 @@ async def convert_brl_to_usdt():
 @app.post("/api/sell-asset-for-usdt")
 async def sell_asset_for_usdt(asset: str):
     """Sell all of an asset for USDT."""
+    import math
+
     if not trading_engine.is_live:
         return {"error": "Ative o Live Trading primeiro", "status": "error"}
 
@@ -364,6 +366,28 @@ async def sell_asset_for_usdt(asset: str):
         }
 
     symbol = f"{asset.upper()}USDT"
+
+    # Get LOT_SIZE step to truncate quantity properly
+    try:
+        client = await binance_client._get_client()
+        resp = await client.get(
+            "/api/v3/exchangeInfo", params={"symbol": symbol}
+        )
+        resp.raise_for_status()
+        info = resp.json()
+        step_size = 0.00001
+        for f in info["symbols"][0].get("filters", []):
+            if f["filterType"] == "LOT_SIZE":
+                step_size = float(f["stepSize"])
+                break
+        # Truncate balance to valid step size
+        if step_size > 0:
+            precision = int(round(-math.log10(step_size)))
+            factor = 10 ** precision
+            balance = math.floor(balance * factor) / factor
+    except Exception as e:
+        logger.warning(f"Could not fetch LOT_SIZE for {symbol}: {e}")
+
     order = await binance_client.place_market_order(
         symbol=symbol,
         side="SELL",
