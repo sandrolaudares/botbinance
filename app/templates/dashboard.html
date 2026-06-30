@@ -93,34 +93,34 @@
         <!-- Scalping Tab -->
         <section class="tab-content active" id="tab-scalping">
             <div class="card">
-                <h3>Scalping Agressivo (USDT)</h3>
-                <p class="description">Escaneando mercado USDT 24/7. Trades rápidos em moedas com momentum. Mais de 400 pares disponíveis.</p>
+                <h3>Scalping Ultra-Agressivo (USDT)</h3>
+                <p class="description">Kline 5min + momentum 24h. Trailing desde entrada, re-entry automático, blacklist de SL, sizing dinâmico. 435+ pares 24/7.</p>
                 <form id="scalping-form">
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Valor por Trade (USDT)</label>
+                            <label>Trade Normal (USDT)</label>
                             <input type="number" id="scalp-amount" value="5" min="1" step="1" required>
                         </div>
                         <div class="form-group">
-                            <label>Take Profit (%)</label>
-                            <input type="number" id="scalp-tp" value="2" step="0.5" required>
+                            <label>Trade Forte (USDT)</label>
+                            <input type="number" id="scalp-amount-strong" value="12" min="1" step="1" required>
                         </div>
                         <div class="form-group">
                             <label>Trailing (%)</label>
-                            <input type="number" id="scalp-trail" value="1" step="0.5" required>
+                            <input type="number" id="scalp-trail" value="0.5" step="0.1" required>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label>Stop Loss (%)</label>
-                            <input type="number" id="scalp-sl" value="1.5" step="0.5" required>
+                            <input type="number" id="scalp-sl" value="0.8" step="0.1" required>
                         </div>
                         <div class="form-group">
-                            <label>Max Horas</label>
-                            <input type="number" id="scalp-hours" value="2" min="1" required>
+                            <label>Max Minutos</label>
+                            <input type="number" id="scalp-minutes" value="30" min="5" required>
                         </div>
                         <div class="form-group">
-                            <label>Max Trades Simultâneos</label>
+                            <label>Max Trades</label>
                             <input type="number" id="scalp-max" value="25" min="1" required>
                         </div>
                     </div>

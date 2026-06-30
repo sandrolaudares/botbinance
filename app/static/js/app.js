@@ -379,10 +379,10 @@ async function activateScalping(e) {
         active: true,
         quote_asset: "USDT",
         amount_per_trade: parseFloat(document.getElementById('scalp-amount').value),
-        take_profit_percent: parseFloat(document.getElementById('scalp-tp').value),
+        amount_per_trade_strong: parseFloat(document.getElementById('scalp-amount-strong').value),
         trailing_percent: parseFloat(document.getElementById('scalp-trail').value),
         stop_loss_percent: parseFloat(document.getElementById('scalp-sl').value),
-        max_hold_hours: parseInt(document.getElementById('scalp-hours').value),
+        max_hold_minutes: parseInt(document.getElementById('scalp-minutes').value),
         max_concurrent_trades: parseInt(document.getElementById('scalp-max').value),
     };
     const result = await apiCall('/api/scalping/activate', 'POST', config);
