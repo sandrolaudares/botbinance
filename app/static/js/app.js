@@ -377,7 +377,8 @@ async function activateScalping(e) {
     e.preventDefault();
     const config = {
         active: true,
-        amount_per_trade_brl: parseFloat(document.getElementById('scalp-amount').value),
+        quote_asset: "USDT",
+        amount_per_trade: parseFloat(document.getElementById('scalp-amount').value),
         take_profit_percent: parseFloat(document.getElementById('scalp-tp').value),
         trailing_percent: parseFloat(document.getElementById('scalp-trail').value),
         stop_loss_percent: parseFloat(document.getElementById('scalp-sl').value),
@@ -409,7 +410,8 @@ async function updateScalpingStatus() {
     if (data.active) {
         document.getElementById('btn-activate-scalp').style.display = 'none';
         document.getElementById('btn-deactivate-scalp').style.display = 'inline-block';
-        statusEl.innerHTML = `<p><strong>ATIVO</strong> | Pares monitorados: ${data.known_pairs} | Posições abertas: ${data.active_positions}</p>`;
+        const qa = data.quote_asset || 'USDT';
+        statusEl.innerHTML = `<p><strong>ATIVO (${qa})</strong> | Pares monitorados: ${data.known_pairs} | Posições abertas: ${data.active_positions}</p>`;
     } else {
         statusEl.innerHTML = '<p>Scalping desativado</p>';
     }

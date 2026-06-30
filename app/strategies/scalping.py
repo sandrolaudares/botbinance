@@ -21,13 +21,14 @@ class ScalpConfig(BaseModel):
     """Configuration for the scalping strategy."""
 
     active: bool = False
-    amount_per_trade_brl: float = 25.0  # Smaller trades, more volume
+    quote_asset: str = "USDT"  # Quote currency for scanning (USDT or BRL)
+    amount_per_trade: float = 5.0  # Amount in quote currency per trade
     take_profit_percent: float = 8.0  # TP for new listings
     trailing_percent: float = 1.0  # Tight trailing
     stop_loss_percent: float = 2.0  # Quick exit on loss
     max_hold_hours: int = 2  # Short hold time
     max_concurrent_trades: int = 10  # More simultaneous positions
-    min_volume_24h: float = 10000.0  # Lower volume threshold
+    min_volume_24h: float = 50000.0  # Min 24h volume in quote currency
     # Momentum scalping (aggressive mode)
     momentum_enabled: bool = True  # Scalp momentum spikes
     momentum_tp_percent: float = 2.0  # Quick TP for momentum
@@ -44,7 +45,7 @@ class ScalpPosition(BaseModel):
     symbol: str
     entry_price: float
     quantity: float
-    amount_brl: float
+    amount_quote: float
     highest_price: float
     trailing_active: bool = False
     status: str = "ACTIVE"  # ACTIVE, CLOSED
@@ -68,7 +69,7 @@ class ScalpingStrategy:
 
     def __init__(self):
         self.config: Optional[ScalpConfig] = None
-        self.known_brl_pairs: set[str] = set()
+        self.known_pairs: set[str] = set()
         self.positions: list[ScalpPosition] = []
         self._initialized: bool = False
         self.activity_log: list[dict] = []  # Real-time activity feed
@@ -91,13 +92,18 @@ class ScalpingStrategy:
     def get_closed_positions(self) -> list[ScalpPosition]:
         return [p for p in self.positions if p.status != "ACTIVE"]
 
+    @property
+    def quote(self) -> str:
+        return self.config.quote_asset if self.config else "USDT"
+
     async def setup(self, config: ScalpConfig) -> bool:
         """Configure and activate scalping strategy."""
         self.config = config
         if config.active and not self._initialized:
             await self._initialize_known_pairs()
         logger.info(
-            f"Scalping configured: R${config.amount_per_trade_brl}/trade, "
+            f"Scalping configured: {config.amount_per_trade} "
+            f"{config.quote_asset}/trade, "
             f"TP={config.take_profit_percent}%, "
             f"Trail={config.trailing_percent}%, "
             f"SL={config.stop_loss_percent}%, "
@@ -106,38 +112,39 @@ class ScalpingStrategy:
         return True
 
     async def _initialize_known_pairs(self):
-        """Load current BRL pairs as baseline (don't trade existing ones)."""
-        pairs = await self._fetch_tradeable_brl_pairs()
-        self.known_brl_pairs = set(pairs)
+        """Load current pairs as baseline (don't trade existing ones)."""
+        pairs = await self._fetch_tradeable_pairs()
+        self.known_pairs = set(pairs)
         self._initialized = True
         logger.info(
-            f"Scalping initialized: {len(self.known_brl_pairs)} "
-            f"existing BRL pairs tracked"
+            f"Scalping initialized: {len(self.known_pairs)} "
+            f"existing {self.quote} pairs tracked"
         )
 
-    async def _fetch_tradeable_brl_pairs(self) -> list[str]:
-        """Fetch all actively tradeable BRL pairs from Binance."""
+    async def _fetch_tradeable_pairs(self) -> list[str]:
+        """Fetch all actively tradeable pairs for the configured quote asset."""
         try:
             client = await binance_client._get_client()
             response = await client.get("/api/v3/exchangeInfo")
             response.raise_for_status()
             data = response.json()
 
-            brl_pairs = []
+            pairs = []
             for symbol_info in data.get("symbols", []):
+                sym = symbol_info.get("symbol", "")
                 if (
-                    symbol_info.get("quoteAsset") == "BRL"
+                    symbol_info.get("quoteAsset") == self.quote
                     and symbol_info.get("status") == "TRADING"
-                    and not symbol_info.get("symbol", "").startswith("LD")
+                    and not sym.startswith("LD")
                 ):
-                    brl_pairs.append(symbol_info["symbol"])
-            return brl_pairs
+                    pairs.append(sym)
+            return pairs
         except Exception as e:
-            logger.error(f"Error fetching BRL pairs: {e}")
+            logger.error(f"Error fetching {self.quote} pairs: {e}")
             return []
 
     async def scan_for_new_listings(self) -> list[str]:
-        """Check for newly listed BRL pairs."""
+        """Check for newly listed pairs."""
         if not self.config or not self.config.active:
             return []
 
@@ -145,17 +152,17 @@ class ScalpingStrategy:
             await self._initialize_known_pairs()
             return []
 
-        current_pairs = await self._fetch_tradeable_brl_pairs()
+        current_pairs = await self._fetch_tradeable_pairs()
         current_set = set(current_pairs)
 
-        new_pairs = current_set - self.known_brl_pairs
+        new_pairs = current_set - self.known_pairs
         if new_pairs:
             logger.info(
                 f"NEW LISTINGS DETECTED: {new_pairs}"
             )
 
         # Update known pairs
-        self.known_brl_pairs = current_set
+        self.known_pairs = current_set
         return list(new_pairs)
 
     async def execute_scalp(self, symbol: str) -> Optional[dict]:
@@ -178,38 +185,40 @@ class ScalpingStrategy:
             if volume < self.config.min_volume_24h:
                 logger.info(
                     f"Scalping: skipping {symbol}, "
-                    f"volume R${volume:.0f} < min R${self.config.min_volume_24h}"
+                    f"vol {volume:.0f} < min {self.config.min_volume_24h}"
                 )
                 return None
 
-        # Place market buy
-        result = await trading_engine.buy_with_brl(
-            symbol, self.config.amount_per_trade_brl, StrategyType.SMART_TRADE
+        # Place market buy using quote currency amount
+        result = await trading_engine.buy_with_quote(
+            symbol, self.config.amount_per_trade, StrategyType.SMART_TRADE
         )
         if not result:
             logger.error(f"Scalping: failed to buy {symbol}")
             return None
 
+        amt = self.config.amount_per_trade
+        q = self.quote
         position = ScalpPosition(
             id=f"scalp_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
             symbol=symbol,
             entry_price=result.price,
             quantity=result.quantity,
-            amount_brl=self.config.amount_per_trade_brl,
+            amount_quote=amt,
             highest_price=result.price,
             created_at=datetime.now(UTC).isoformat(),
         )
         self.positions.append(position)
 
         logger.info(
-            f"SCALP BUY: {symbol} @ R${result.price:.4f}, "
+            f"SCALP BUY: {symbol} @ {result.price:.6f}, "
             f"qty={result.quantity:.8f}, "
-            f"amount=R${self.config.amount_per_trade_brl:.2f}"
+            f"amount={amt:.2f} {q}"
         )
         self._log_activity(
             "COMPRA (Nova Listagem)", symbol,
-            f"R${result.price:.4f} x {result.quantity:.6f} = "
-            f"R${self.config.amount_per_trade_brl:.2f}"
+            f"{result.price:.6f} x {result.quantity:.6f} = "
+            f"{amt:.2f} {q}"
         )
         return position.model_dump()
 
@@ -344,7 +353,7 @@ class ScalpingStrategy:
         return closed
 
     async def _get_open_markets(self) -> set[str]:
-        """Get set of BRL symbols currently open for trading."""
+        """Get set of symbols currently open for trading."""
         try:
             client = await binance_client._get_client()
             response = await client.get("/api/v3/exchangeInfo")
@@ -352,7 +361,7 @@ class ScalpingStrategy:
             data = response.json()
             return {
                 s["symbol"] for s in data.get("symbols", [])
-                if s.get("quoteAsset") == "BRL"
+                if s.get("quoteAsset") == self.quote
                 and s.get("status") == "TRADING"
                 and not s.get("symbol", "").startswith("LD")
             }
@@ -373,18 +382,19 @@ class ScalpingStrategy:
         # Get open markets to avoid "Market is closed" errors
         open_markets = await self._get_open_markets()
 
-        # Get all BRL tickers
+        # Get all tickers
         tickers = await binance_client.get_ticker_24h()
         if not tickers:
             return []
 
-        # Filter BRL pairs with momentum signals
+        suffix = self.quote
+        # Filter pairs with momentum signals
         candidates = []
         active_symbols = {p.symbol for p in active}
 
         for t in tickers:
             symbol = t.get("symbol", "")
-            if not symbol.endswith("BRL"):
+            if not symbol.endswith(suffix):
                 continue
             if symbol.startswith("LD") or "1MBB" in symbol:
                 continue
@@ -446,9 +456,9 @@ class ScalpingStrategy:
         if len(active) >= self.config.max_concurrent_trades:
             return None
 
-        # Place market buy
-        result = await trading_engine.buy_with_brl(
-            symbol, self.config.amount_per_trade_brl, StrategyType.SMART_TRADE
+        # Place market buy using quote currency
+        result = await trading_engine.buy_with_quote(
+            symbol, self.config.amount_per_trade, StrategyType.SMART_TRADE
         )
         if not result:
             logger.error(f"Scalp momentum: failed to buy {symbol}")
@@ -457,32 +467,34 @@ class ScalpingStrategy:
             )
             return None
 
+        amt = self.config.amount_per_trade
+        q = self.quote
         position = ScalpPosition(
             id=f"scalp_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
             symbol=symbol,
             entry_price=result.price,
             quantity=result.quantity,
-            amount_brl=self.config.amount_per_trade_brl,
+            amount_quote=amt,
             highest_price=result.price,
             created_at=datetime.now(UTC).isoformat(),
         )
         self.positions.append(position)
 
         logger.info(
-            f"SCALP MOMENTUM BUY: {symbol} @ R${result.price:.4f}, "
-            f"qty={result.quantity:.8f}, R${self.config.amount_per_trade_brl}"
+            f"SCALP MOMENTUM BUY: {symbol} @ {result.price:.6f}, "
+            f"qty={result.quantity:.8f}, {amt} {q}"
         )
         self._log_activity(
             "COMPRA (Momentum)", symbol,
-            f"R${result.price:.4f} x {result.quantity:.6f} = "
-            f"R${self.config.amount_per_trade_brl:.2f}"
+            f"{result.price:.6f} x {result.quantity:.6f} = "
+            f"{amt:.2f} {q}"
         )
         return position.model_dump()
 
     async def run_cycle(self):
         """Run one full cycle: scan + momentum + monitor positions.
 
-        Called by the scheduler every 60 seconds.
+        Called by the scheduler every 30 seconds.
         """
         if not self.config or not self.config.active:
             return

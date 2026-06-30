@@ -69,6 +69,50 @@ class TradingEngine:
         )
         return trade
 
+    async def buy_with_quote(
+        self,
+        symbol: str,
+        amount: float,
+        strategy: StrategyType,
+        price: Optional[float] = None,
+    ) -> Optional[Trade]:
+        """Buy a symbol with a quote currency amount (BRL, USDT, etc.)."""
+        if not self.is_live:
+            return await paper_engine.buy_with_brl(
+                symbol, amount, strategy, price
+            )
+
+        order = await binance_client.place_market_order(
+            symbol=symbol,
+            side="BUY",
+            quote_order_qty=amount,
+        )
+        if not order:
+            return None
+
+        executed_qty = float(order.get("executedQty", 0))
+        cumulative_quote = float(order.get("cummulativeQuoteQty", 0))
+        avg_price = (
+            cumulative_quote / executed_qty if executed_qty > 0 else 0
+        )
+
+        trade = Trade(
+            symbol=symbol,
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=executed_qty,
+            price=avg_price,
+            total_brl=cumulative_quote,
+            status=OrderStatus.FILLED,
+            strategy=strategy,
+            pnl=0.0,
+        )
+        logger.info(
+            f"[LIVE] BUY {executed_qty:.6f} {symbol} @ {avg_price:.6f} "
+            f"(Total: {cumulative_quote:.2f})"
+        )
+        return trade
+
     async def sell(
         self,
         symbol: str,

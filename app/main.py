@@ -310,7 +310,45 @@ async def close_all_smart_trades():
     return {"status": "closed", "trades_closed": closed}
 
 
-# ---- Scalping (New Coin Listings) ----
+# ---- Currency Conversion ----
+
+
+@app.post("/api/convert-to-usdt")
+async def convert_brl_to_usdt():
+    """Convert all available BRL to USDT."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+
+    brl_balance = await binance_client.get_brl_balance()
+    if brl_balance is None:
+        return {"error": "Não foi possível consultar saldo", "status": "error"}
+    if brl_balance < 10:
+        return {
+            "error": f"Saldo BRL insuficiente: R${brl_balance:.2f}",
+            "status": "error",
+        }
+
+    order = await binance_client.place_market_order(
+        symbol="USDTBRL",
+        side="BUY",
+        quote_order_qty=brl_balance,
+    )
+    if not order:
+        return {"error": "Falha ao comprar USDT", "status": "error"}
+
+    executed_qty = float(order.get("executedQty", 0))
+    cumulative_quote = float(order.get("cummulativeQuoteQty", 0))
+
+    usdt_balance = await binance_client.get_asset_balance("USDT")
+    return {
+        "status": "success",
+        "usdt_bought": executed_qty,
+        "brl_spent": cumulative_quote,
+        "usdt_balance": usdt_balance,
+    }
+
+
+# ---- Scalping (New Coin Listings + Momentum) ----
 
 
 @app.post("/api/scalping/activate")
@@ -323,7 +361,7 @@ async def activate_scalping(config: ScalpConfig):
     return {
         "status": "activated",
         "config": config.model_dump(),
-        "known_pairs": len(scalping_strategy.known_brl_pairs),
+        "known_pairs": len(scalping_strategy.known_pairs),
     }
 
 
@@ -344,7 +382,8 @@ async def get_scalping_status():
         "active": bool(
             scalping_strategy.config and scalping_strategy.config.active
         ),
-        "known_pairs": len(scalping_strategy.known_brl_pairs),
+        "quote_asset": scalping_strategy.quote,
+        "known_pairs": len(scalping_strategy.known_pairs),
         "active_positions": len(active_positions),
         "closed_positions": len(closed_positions),
         "positions": [p.model_dump() for p in active_positions],
