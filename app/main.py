@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         scheduled_smart_trade_monitor, "interval", seconds=30, id="smart_trade"
     )
     scheduler.add_job(
-        scheduled_scalping_cycle, "interval", seconds=60, id="scalping"
+        scheduled_scalping_cycle, "interval", seconds=30, id="scalping"
     )
     scheduler.start()
 

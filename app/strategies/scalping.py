@@ -21,19 +21,20 @@ class ScalpConfig(BaseModel):
     """Configuration for the scalping strategy."""
 
     active: bool = False
-    amount_per_trade_brl: float = 100.0  # Amount to invest per trade
-    take_profit_percent: float = 15.0  # TP for new listings
-    trailing_percent: float = 2.0  # Trailing deviation
-    stop_loss_percent: float = 5.0  # Stop loss protection
-    max_hold_hours: int = 4  # Force sell after X hours
-    max_concurrent_trades: int = 5  # Max simultaneous scalp positions
-    min_volume_24h: float = 50000.0  # Minimum 24h volume to enter
-    # Momentum scalping (active mode)
-    momentum_enabled: bool = True  # Also scalp momentum spikes
-    momentum_tp_percent: float = 5.0  # Tighter TP for momentum
-    momentum_sl_percent: float = 3.0  # Tighter SL for momentum
-    min_price_change_1h: float = 3.0  # Min 1h price change to trigger
-    min_volume_spike: float = 2.0  # Volume must be 2x average
+    amount_per_trade_brl: float = 25.0  # Smaller trades, more volume
+    take_profit_percent: float = 8.0  # TP for new listings
+    trailing_percent: float = 1.0  # Tight trailing
+    stop_loss_percent: float = 2.0  # Quick exit on loss
+    max_hold_hours: int = 2  # Short hold time
+    max_concurrent_trades: int = 10  # More simultaneous positions
+    min_volume_24h: float = 10000.0  # Lower volume threshold
+    # Momentum scalping (aggressive mode)
+    momentum_enabled: bool = True  # Scalp momentum spikes
+    momentum_tp_percent: float = 2.0  # Quick TP for momentum
+    momentum_sl_percent: float = 1.5  # Tight SL for momentum
+    min_price_change_1h: float = 0.5  # Very low threshold
+    min_volume_spike: float = 1.5  # Volume 1.5x average
+    max_trades_per_cycle: int = 3  # Up to 3 buys per 60s cycle
 
 
 class ScalpPosition(BaseModel):
@@ -409,9 +410,8 @@ class ScalpingStrategy:
             if price_change < self.config.min_price_change_1h:
                 continue
 
-            # Check that current price is above weighted average
-            # (confirms upward momentum, not just a spike that already reversed)
-            if weighted_avg > 0 and last_price > weighted_avg * 1.01:
+            # Confirm upward momentum (price above weighted avg)
+            if weighted_avg > 0 and last_price > weighted_avg * 1.002:
                 candidates.append({
                     "symbol": symbol,
                     "change": price_change,
@@ -423,7 +423,10 @@ class ScalpingStrategy:
 
         # Take top candidates (leave room for max trades)
         slots = self.config.max_concurrent_trades - len(active)
-        top = candidates[:min(slots, 2)]  # Max 2 momentum trades per cycle
+        max_per_cycle = getattr(
+            self.config, 'max_trades_per_cycle', 3
+        )
+        top = candidates[:min(slots, max_per_cycle)]
 
         if top:
             symbols = [c["symbol"] for c in top]
