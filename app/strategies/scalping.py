@@ -41,8 +41,13 @@ class ScalpConfig(BaseModel):
     trail_from_entry: bool = True  # Start trailing immediately
     reentry_enabled: bool = True  # Re-enter after TP if still rising
     blacklist_minutes: int = 30  # Cooldown after SL
-    trend_filter: bool = True  # Only buy when BTC/ETH trending up
     accumulation_enabled: bool = True  # Double size on 3rd+ re-entry
+    # Bearish scalping (dip-buying)
+    bearish_enabled: bool = True  # Buy oversold dips for bounce profit
+    bearish_drop_threshold: float = -2.0  # Min 24h drop % to consider
+    bearish_bounce_min: float = 0.3  # Min bounce from low to confirm reversal
+    bearish_tp_percent: float = 1.5  # TP for bearish scalps
+    bearish_sl_percent: float = 1.0  # SL for bearish scalps
 
 
 class ScalpPosition(BaseModel):
@@ -83,7 +88,6 @@ class ScalpingStrategy:
         self.activity_log: list[dict] = []
         self._blacklist: dict[str, datetime] = {}  # symbol -> blacklist_until
         self._reentry_count: dict[str, int] = {}  # symbol -> re-entry count
-        self._market_trend: Optional[str] = None  # "up", "down", "neutral"
 
     def _log_activity(self, action: str, symbol: str, details: str = ""):
         entry = {
@@ -120,29 +124,6 @@ class ScalpingStrategy:
             return
         mins = self.config.blacklist_minutes
         self._blacklist[symbol] = datetime.now(UTC) + timedelta(minutes=mins)
-
-    async def _check_market_trend(self) -> str:
-        """Check BTC + ETH trend to filter entries."""
-        try:
-            btc_klines = await binance_client.get_klines(
-                f"BTC{self.quote}", interval="15m", limit=4
-            )
-            eth_klines = await binance_client.get_klines(
-                f"ETH{self.quote}", interval="15m", limit=4
-            )
-            up_count = 0
-            for klines in [btc_klines, eth_klines]:
-                if klines and len(klines) >= 3:
-                    closes = [float(k[4]) for k in klines]
-                    if closes[-1] > closes[-3]:
-                        up_count += 1
-            if up_count == 2:
-                return "up"
-            if up_count == 0:
-                return "down"
-            return "neutral"
-        except Exception:
-            return "neutral"
 
     async def setup(self, config: ScalpConfig) -> bool:
         self.config = config
@@ -291,16 +272,6 @@ class ScalpingStrategy:
         active = self.get_active_positions()
         if len(active) >= self.config.max_concurrent_trades:
             return []
-
-        # Trend filter: skip buying when BTC+ETH both dropping
-        if self.config.trend_filter:
-            self._market_trend = await self._check_market_trend()
-            if self._market_trend == "down":
-                self._log_activity(
-                    "TREND FILTER", "BTC+ETH",
-                    "Mercado em queda - pulando compras"
-                )
-                return []
 
         open_markets = await self._get_open_markets()
         tickers = await binance_client.get_ticker_24h()
@@ -700,8 +671,173 @@ class ScalpingStrategy:
                     signal["symbol"], signal["strength"]
                 )
 
+        # Scan for bearish (dip-buying) opportunities
+        if self.config.bearish_enabled:
+            bearish_signals = await self.scan_bearish_opportunities()
+            if bearish_signals:
+                desc = ", ".join(
+                    f"{s['symbol']}({s['drop']:.1f}%)"
+                    for s in bearish_signals
+                )
+                self._log_activity(
+                    "BEARISH DETECTADO", desc,
+                    f"{len(bearish_signals)} dips para bounce"
+                )
+            for signal in bearish_signals:
+                await self.execute_bearish_scalp(
+                    signal["symbol"], signal["strength"]
+                )
+
         # Monitor existing positions
         await self.monitor_positions()
+
+    async def scan_bearish_opportunities(self) -> list[dict]:
+        """Find coins with sharp drops showing bounce signals (dip-buying)."""
+        if not self.config or not self.config.bearish_enabled:
+            return []
+
+        active = self.get_active_positions()
+        if len(active) >= self.config.max_concurrent_trades:
+            return []
+
+        open_markets = await self._get_open_markets()
+        tickers = await binance_client.get_ticker_24h()
+        if not tickers:
+            return []
+
+        suffix = self.quote
+        candidates = []
+        active_symbols = {p.symbol for p in active}
+
+        for t in tickers:
+            symbol = t.get("symbol", "")
+            if not symbol.endswith(suffix):
+                continue
+            if symbol.startswith("LD") or "1MBB" in symbol:
+                continue
+            if symbol in active_symbols:
+                continue
+            if symbol not in open_markets:
+                continue
+            if self._is_blacklisted(symbol):
+                continue
+
+            try:
+                price_change = float(t.get("priceChangePercent", 0))
+                volume_24h = float(t.get("quoteVolume", 0))
+                last_price = float(t.get("lastPrice", 0))
+                low_price = float(t.get("lowPrice", 0))
+            except (ValueError, TypeError):
+                continue
+
+            if volume_24h < self.config.min_volume_24h:
+                continue
+            # Only consider coins that dropped significantly
+            if price_change > self.config.bearish_drop_threshold:
+                continue
+
+            # Check bounce from low: price recovered from the 24h low
+            if low_price > 0 and last_price > low_price:
+                bounce_pct = (
+                    (last_price - low_price) / low_price
+                ) * 100
+                if bounce_pct >= self.config.bearish_bounce_min:
+                    candidates.append({
+                        "symbol": symbol,
+                        "drop": price_change,
+                        "bounce": bounce_pct,
+                        "volume": volume_24h,
+                    })
+
+        # Sort by bounce strength (strongest bounce from low first)
+        candidates.sort(key=lambda x: x["bounce"], reverse=True)
+
+        slots = self.config.max_concurrent_trades - len(active)
+        max_per_cycle = self.config.max_trades_per_cycle
+        pre_candidates = candidates[:min(slots, max_per_cycle * 2)]
+
+        # Confirm with 5min kline: recent candles should show recovery
+        confirmed = []
+        for c in pre_candidates:
+            if len(confirmed) >= max_per_cycle:
+                break
+            kline = await self._analyze_5min_klines(c["symbol"])
+            if kline and kline["recent_change"] > 0:
+                c["kline"] = kline
+                c["strength"] = (
+                    "strong" if c["bounce"] >= 1.0 else "normal"
+                )
+                confirmed.append(c)
+            elif kline is None:
+                c["kline"] = None
+                c["strength"] = "normal"
+                confirmed.append(c)
+
+        if confirmed:
+            desc = ", ".join(
+                f"{c['symbol']} {c['drop']:.1f}% bounce+{c['bounce']:.1f}%"
+                for c in confirmed
+            )
+            logger.info(f"Scalp BEARISH dip-buy signals: {desc}")
+
+        return confirmed
+
+    async def execute_bearish_scalp(
+        self, symbol: str, strength: str = "normal"
+    ) -> Optional[dict]:
+        """Buy a dip for bounce profit (bearish market scalping)."""
+        if not self.config:
+            return None
+
+        active = self.get_active_positions()
+        if len(active) >= self.config.max_concurrent_trades:
+            return None
+
+        if strength == "strong":
+            amt = self.config.amount_per_trade_strong
+        else:
+            amt = self.config.amount_per_trade
+
+        # Accumulation on re-entries
+        reentry_n = self._reentry_count.get(symbol, 0)
+        if self.config.accumulation_enabled and reentry_n >= 2:
+            amt = amt * 2
+
+        result = await trading_engine.buy_with_quote(
+            symbol, amt, StrategyType.SMART_TRADE
+        )
+        if not result:
+            self._log_activity(
+                "FALHA BEARISH", symbol,
+                "Ordem rejeitada ou mercado fechado"
+            )
+            return None
+
+        q = self.quote
+        position = ScalpPosition(
+            id=f"bear_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
+            symbol=symbol,
+            entry_price=result.price,
+            quantity=result.quantity,
+            amount_quote=amt,
+            highest_price=result.price,
+            signal_strength=strength,
+            trailing_active=self.config.trail_from_entry,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        self.positions.append(position)
+
+        label = "FORTE" if strength == "strong" else "NORMAL"
+        logger.info(
+            f"BEARISH DIP-BUY [{label}]: {symbol} @ {result.price:.6f}, "
+            f"qty={result.quantity:.8f}, {amt} {q}"
+        )
+        self._log_activity(
+            f"COMPRA BEARISH ({label})", symbol,
+            f"Dip-buy @ {result.price:.6f} x {result.quantity:.6f} = "
+            f"{amt:.2f} {q}"
+        )
+        return position.model_dump()
 
 
 scalping_strategy = ScalpingStrategy()
