@@ -141,6 +141,229 @@ async def get_top_pairs(limit: int = 10):
     return usdt_pairs[:limit]
 
 
+# ---- Asset Management ----
+
+
+@app.get("/api/balances")
+async def get_all_balances():
+    """Get all non-zero asset balances."""
+    data = await binance_client.get_account_info()
+    if not data:
+        return []
+    balances = []
+    for b in data.get("balances", []):
+        free = float(b.get("free", 0))
+        locked = float(b.get("locked", 0))
+        total = free + locked
+        if total > 0:
+            balances.append({
+                "asset": b["asset"],
+                "free": free,
+                "locked": locked,
+                "total": total,
+            })
+    return balances
+
+
+@app.post("/api/sell-asset-for-usdt")
+async def sell_asset_for_usdt(asset: str):
+    """Sell all of an asset for USDT."""
+    import math
+
+    asset = asset.upper()
+    if asset in ("USDT", "USD"):
+        return {"error": "Não pode vender USDT por USDT", "status": "error"}
+
+    balance = await binance_client.get_asset_balance(asset)
+    if balance is None or balance <= 0:
+        return {"error": f"Sem saldo de {asset}", "status": "error"}
+
+    symbol = f"{asset}USDT"
+
+    # Get LOT_SIZE step to truncate quantity properly
+    try:
+        client = await binance_client._get_client()
+        resp = await client.get(
+            "/api/v3/exchangeInfo", params={"symbol": symbol}
+        )
+        resp.raise_for_status()
+        info = resp.json()
+        step_size = 0.00001
+        for f in info["symbols"][0].get("filters", []):
+            if f["filterType"] == "LOT_SIZE":
+                step_size = float(f["stepSize"])
+                break
+        if step_size > 0:
+            precision = int(round(-math.log10(step_size)))
+            factor = 10 ** precision
+            balance = math.floor(balance * factor) / factor
+    except Exception as e:
+        logger.warning(f"Could not fetch LOT_SIZE for {symbol}: {e}")
+
+    if balance <= 0:
+        return {"error": f"Saldo de {asset} muito pequeno", "status": "error"}
+
+    order = await binance_client.place_market_order(
+        symbol=symbol, side="SELL", quantity=balance,
+    )
+    if not order:
+        return {"error": f"Falha ao vender {asset}", "status": "error"}
+
+    executed_qty = float(order.get("executedQty", 0))
+    cumulative_quote = float(order.get("cummulativeQuoteQty", 0))
+
+    return {
+        "status": "success",
+        "asset": asset,
+        "sold_qty": executed_qty,
+        "usdt_received": cumulative_quote,
+    }
+
+
+@app.post("/api/sell-all-for-usdt")
+async def sell_all_small_positions():
+    """Sell all non-USDT assets to consolidate into USDT for scalping."""
+    import math
+
+    data = await binance_client.get_account_info()
+    if not data:
+        return {"error": "Não foi possível consultar conta", "results": []}
+
+    skip_assets = {"USDT", "USD", "BNB"}  # Keep BNB for fees
+    results = []
+
+    for b in data.get("balances", []):
+        asset = b["asset"]
+        free = float(b.get("free", 0))
+        if free <= 0 or asset in skip_assets:
+            continue
+        if asset.startswith("LD"):
+            continue
+
+        symbol = f"{asset}USDT"
+
+        # Check if pair exists and get LOT_SIZE
+        try:
+            client = await binance_client._get_client()
+            info_resp = await client.get(
+                "/api/v3/exchangeInfo", params={"symbol": symbol}
+            )
+            if info_resp.status_code != 200:
+                continue
+            info = info_resp.json()
+            if not info.get("symbols"):
+                continue
+
+            step_size = 0.00001
+            min_notional = 5.0
+            for f in info["symbols"][0].get("filters", []):
+                if f["filterType"] == "LOT_SIZE":
+                    step_size = float(f["stepSize"])
+                elif f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
+                    min_notional = float(
+                        f.get("minNotional", f.get("minQty", 5.0))
+                    )
+
+            if step_size > 0:
+                precision = int(round(-math.log10(step_size)))
+                factor = 10 ** precision
+                qty = math.floor(free * factor) / factor
+            else:
+                qty = free
+
+            if qty <= 0:
+                continue
+
+            # Get price to check min notional
+            price_resp = await client.get(
+                "/api/v3/ticker/price", params={"symbol": symbol}
+            )
+            if price_resp.status_code != 200:
+                continue
+            price = float(price_resp.json().get("price", 0))
+            notional = qty * price
+            if notional < min_notional:
+                results.append({
+                    "asset": asset, "status": "skipped",
+                    "reason": f"Valor muito pequeno (${notional:.2f})",
+                })
+                continue
+
+            order = await binance_client.place_market_order(
+                symbol=symbol, side="SELL", quantity=qty,
+            )
+            if order:
+                received = float(order.get("cummulativeQuoteQty", 0))
+                results.append({
+                    "asset": asset, "status": "sold",
+                    "qty": float(order.get("executedQty", 0)),
+                    "usdt_received": received,
+                })
+            else:
+                results.append({
+                    "asset": asset, "status": "failed",
+                    "reason": "Ordem rejeitada",
+                })
+        except Exception as e:
+            results.append({
+                "asset": asset, "status": "failed",
+                "reason": str(e)[:80],
+            })
+
+    usdt_balance = await binance_client.get_asset_balance("USDT")
+    return {
+        "results": results,
+        "usdt_balance": usdt_balance,
+    }
+
+
+@app.post("/api/redeem-earn")
+async def redeem_all_earn():
+    """Redeem all Binance Earn flexible products to spot wallet."""
+    client = await binance_client._get_client()
+
+    # List flexible products
+    params = binance_client._sign_params({"size": 100, "current": 1})
+    resp = await client.get(
+        "/sapi/v1/simple-earn/flexible/position", params=params
+    )
+    if resp.status_code != 200:
+        return {"error": f"Failed to list Earn: {resp.text}", "results": []}
+
+    data = resp.json()
+    rows = data.get("rows", [])
+    results = []
+
+    for row in rows:
+        asset = row.get("asset", "")
+        total_amount = float(row.get("totalAmount", 0))
+        product_id = row.get("productId", "")
+        if total_amount <= 0 or not product_id:
+            continue
+
+        # Redeem all
+        redeem_params = binance_client._sign_params({
+            "productId": product_id,
+            "redeemAll": "true",
+        })
+        redeem_resp = await client.post(
+            "/sapi/v1/simple-earn/flexible/redeem", params=redeem_params
+        )
+        if redeem_resp.status_code == 200:
+            results.append({
+                "asset": asset, "amount": total_amount,
+                "status": "redeemed",
+            })
+        else:
+            results.append({
+                "asset": asset, "amount": total_amount,
+                "status": "failed",
+                "reason": redeem_resp.text[:100],
+            })
+
+    return {"results": results}
+
+
 # ---- Scalping (New Coin Listings + Momentum) ----
 
 
