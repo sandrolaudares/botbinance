@@ -9,29 +9,29 @@
 <body>
     <div class="container">
         <header>
-            <h1>🤖 Binance Trading Bot</h1>
-            <div class="badge paper" id="trading-mode-badge" onclick="toggleTradingMode()" style="cursor:pointer" title="Clique para alternar modo">PAPER TRADING</div>
+            <h1>Binance Trading Bot</h1>
+            <div class="badge live" id="trading-mode-badge">SCALPING 24/7</div>
         </header>
 
         <!-- Portfolio Summary -->
         <section class="card portfolio-card">
-            <h2>💰 Portfólio</h2>
+            <h2>Portfólio</h2>
             <div class="portfolio-grid">
                 <div class="stat">
                     <span class="stat-label">Saldo Total</span>
-                    <span class="stat-value" id="total-balance">R$ 0,00</span>
+                    <span class="stat-value" id="total-balance">$ 0.00</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Disponível</span>
-                    <span class="stat-value" id="available-brl">R$ 0,00</span>
+                    <span class="stat-value" id="available-brl">$ 0.00</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Em Posições</span>
-                    <span class="stat-value" id="positions-value">R$ 0,00</span>
+                    <span class="stat-value" id="positions-value">$ 0.00</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">P&L Total</span>
-                    <span class="stat-value" id="total-pnl">R$ 0,00</span>
+                    <span class="stat-value" id="total-pnl">$ 0.00</span>
                 </div>
             </div>
         </section>
@@ -40,11 +40,55 @@
         <div class="tabs">
             <button class="tab active" data-tab="scalping">Scalping</button>
             <button class="tab" data-tab="breakout">Breakout</button>
-            <button class="tab" data-tab="smart-trade">Smart Trade</button>
-            <button class="tab" data-tab="auto-invest">Auto-Invest</button>
             <button class="tab" data-tab="market">Mercado</button>
             <button class="tab" data-tab="trades">Histórico</button>
         </div>
+
+        <!-- Scalping Tab -->
+        <section class="tab-content active" id="tab-scalping">
+            <div class="card">
+                <h3>Scalping Ultra-Agressivo (USDT) - 24/7</h3>
+                <p class="description">Bullish (momentum alta) + Bearish (dip-buy na queda). Kline 5min, trailing desde entrada, re-entry, blacklist, sizing dinâmico. 440+ pares.</p>
+                <form id="scalping-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Trade Normal (USDT)</label>
+                            <input type="number" id="scalp-amount" value="5" min="1" step="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Trade Forte (USDT)</label>
+                            <input type="number" id="scalp-amount-strong" value="12" min="1" step="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Trailing (%)</label>
+                            <input type="number" id="scalp-trail" value="0.5" step="0.1" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Stop Loss (%)</label>
+                            <input type="number" id="scalp-sl" value="0.8" step="0.1" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Minutos</label>
+                            <input type="number" id="scalp-minutes" value="30" min="5" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Trades</label>
+                            <input type="number" id="scalp-max" value="25" min="1" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="btn-activate-scalp">Reconfigurar Scalping</button>
+                    <button type="button" class="btn btn-danger" id="btn-deactivate-scalp" style="display:none">Desativar</button>
+                </form>
+                <div id="scalping-status" class="status-container" style="margin-top:15px"></div>
+                <div id="scalping-positions" style="margin-top:10px"></div>
+                <div id="scalping-activity" style="margin-top:15px">
+                    <h4>Log em Tempo Real</h4>
+                    <div id="activity-log" style="max-height:500px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
+                </div>
+            </div>
+        </section>
 
         <!-- Breakout Tab -->
         <section class="tab-content" id="tab-breakout">
@@ -80,143 +124,14 @@
                             <input type="number" id="brk-sl" value="1.5" step="0.1" min="0.5">
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary" id="btn-activate-brk">Ativar Breakout</button>
+                    <button type="submit" class="btn btn-primary" id="btn-activate-brk">Reconfigurar Breakout</button>
                     <button type="button" class="btn btn-danger" id="btn-deactivate-brk" style="display:none">Desativar</button>
                 </form>
                 <div id="breakout-status" class="status-container" style="margin-top:15px"></div>
                 <div id="breakout-positions" style="margin-top:10px"></div>
                 <div id="breakout-activity" style="margin-top:15px">
                     <h4>Atividade Breakout</h4>
-                    <div id="breakout-log" style="max-height:300px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Smart Trade Tab -->
-        <section class="tab-content" id="tab-smart-trade">
-            <div class="card">
-                <h3>Smart Trade</h3>
-                <p class="description">Crie trades inteligentes com Take Profit + Trailing Stop automáticos. Monitoramento contínuo a cada 30s.</p>
-                <form id="smart-trade-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Par (ex: BTCBRL)</label>
-                            <input type="text" id="st-symbol" value="BTCBRL" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Valor (BRL)</label>
-                            <input type="number" id="st-amount" value="100" step="10" required>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Take Profit (%)</label>
-                            <input type="number" id="st-tp" value="3.0" step="0.5" min="0.5">
-                        </div>
-                        <div class="form-group">
-                            <label>Trailing (%)</label>
-                            <input type="number" id="st-trail" value="1.0" step="0.1" min="0.1">
-                        </div>
-                        <div class="form-group">
-                            <label>Stop Loss (%)</label>
-                            <input type="number" id="st-sl" value="5.0" step="0.5" min="1.0">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <button type="submit" class="btn btn-primary">Criar Smart Trade</button>
-                        <button type="button" class="btn btn-secondary" id="btn-auto-smart">Auto Smart Trades</button>
-                    </div>
-                </form>
-            </div>
-            <div class="card">
-                <h3>Smart Trades Ativos</h3>
-                <div id="smart-trade-status" class="status-container">
-                    <p class="empty-state">Nenhum Smart Trade ativo</p>
-                </div>
-                <button class="btn btn-danger" id="btn-close-all-st" style="margin-top:10px;display:none">Fechar Todos</button>
-            </div>
-        </section>
-
-        <!-- Scalping Tab -->
-        <section class="tab-content active" id="tab-scalping">
-            <div class="card">
-                <h3>Scalping Ultra-Agressivo (USDT)</h3>
-                <p class="description">Kline 5min + momentum 24h. Trailing desde entrada, re-entry automático, blacklist de SL, sizing dinâmico. 435+ pares 24/7.</p>
-                <form id="scalping-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Trade Normal (USDT)</label>
-                            <input type="number" id="scalp-amount" value="5" min="1" step="1" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Trade Forte (USDT)</label>
-                            <input type="number" id="scalp-amount-strong" value="12" min="1" step="1" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Trailing (%)</label>
-                            <input type="number" id="scalp-trail" value="0.5" step="0.1" required>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Stop Loss (%)</label>
-                            <input type="number" id="scalp-sl" value="0.8" step="0.1" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Max Minutos</label>
-                            <input type="number" id="scalp-minutes" value="30" min="5" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Max Trades</label>
-                            <input type="number" id="scalp-max" value="25" min="1" required>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary" id="btn-activate-scalp">Ativar Scalping USDT</button>
-                    <button type="button" class="btn btn-danger" id="btn-deactivate-scalp" style="display:none">Desativar</button>
-                </form>
-                <div id="scalping-status" class="status-container" style="margin-top:15px"></div>
-                <div id="scalping-positions" style="margin-top:10px"></div>
-                <div id="scalping-activity" style="margin-top:15px">
-                    <h4>Atividade em Tempo Real</h4>
-                    <div id="activity-log" style="max-height:300px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Auto-Invest Tab -->
-        <section class="tab-content" id="tab-auto-invest">
-            <div class="card">
-                <h3>Configurar Auto-Invest</h3>
-                <form id="auto-invest-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Top N Moedas</label>
-                            <input type="number" id="ai-topn" value="5" min="1" max="20">
-                        </div>
-                        <div class="form-group">
-                            <label>Investimento Total (BRL)</label>
-                            <input type="number" id="ai-investment" value="500" step="50">
-                        </div>
-                        <div class="form-group">
-                            <label>Rebalancear (horas)</label>
-                            <input type="number" id="ai-rebalance" value="4" min="1">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Ativar Auto-Invest</button>
-                    <button type="button" class="btn btn-secondary" id="btn-rebalance">Rebalancear Agora</button>
-                    <button type="button" class="btn btn-secondary" id="btn-scan">Escanear Mercado</button>
-                </form>
-            </div>
-            <div class="card">
-                <h3>Status Auto-Invest</h3>
-                <div id="auto-invest-status" class="status-container">
-                    <p class="empty-state">Auto-Invest não configurado</p>
-                </div>
-            </div>
-            <div class="card">
-                <h3>Análise de Mercado</h3>
-                <div id="market-analysis" class="status-container">
-                    <p class="empty-state">Clique em "Escanear Mercado" para analisar</p>
+                    <div id="breakout-log" style="max-height:500px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
                 </div>
             </div>
         </section>
@@ -224,7 +139,7 @@
         <!-- Market Tab -->
         <section class="tab-content" id="tab-market">
             <div class="card">
-                <h3>Top Pares BRL por Volume</h3>
+                <h3>Top Pares USDT por Volume</h3>
                 <button class="btn btn-secondary" id="btn-refresh-market">Atualizar</button>
                 <div id="market-pairs" class="status-container">
                     <p class="empty-state">Carregando...</p>
@@ -249,11 +164,6 @@
             <div id="positions-list">
                 <p class="empty-state">Nenhuma posição aberta</p>
             </div>
-        </section>
-
-        <!-- Controls -->
-        <section class="card controls">
-            <button class="btn btn-danger" id="btn-reset">Resetar Conta</button>
         </section>
     </div>
 
