@@ -15,6 +15,7 @@ from app.services.market_analysis import market_analyzer
 from app.services.paper_trading import paper_engine
 from app.services.trading_engine import trading_engine
 from app.strategies.auto_invest import auto_invest_strategy
+from app.strategies.breakout import BreakoutConfig, breakout_strategy
 from app.strategies.scalping import ScalpConfig, scalping_strategy
 from app.strategies.smart_trade import SmartTradeConfig, smart_trade_strategy
 
@@ -44,6 +45,11 @@ async def scheduled_scalping_cycle():
     await scalping_strategy.run_cycle()
 
 
+async def scheduled_breakout_cycle():
+    """Run breakout cycle: detect consolidation breakouts."""
+    await breakout_strategy.run_cycle()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -58,6 +64,9 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         scheduled_scalping_cycle, "interval", seconds=30, id="scalping"
+    )
+    scheduler.add_job(
+        scheduled_breakout_cycle, "interval", seconds=30, id="breakout"
     )
     scheduler.start()
 
@@ -466,4 +475,62 @@ async def close_scalp_position(position_id: str):
 async def close_all_scalp_positions():
     """Close all scalping positions."""
     closed = await scalping_strategy.close_all()
+    return {"status": "closed", "positions_closed": closed}
+
+
+# ---- Breakout Trading ----
+
+
+@app.post("/api/breakout/activate")
+async def activate_breakout(config: BreakoutConfig):
+    """Activate the breakout trading strategy."""
+    if not trading_engine.is_live:
+        return {"error": "Ative o Live Trading primeiro", "status": "error"}
+    config.active = True
+    await breakout_strategy.setup(config)
+    return {
+        "status": "activated",
+        "config": config.model_dump(),
+    }
+
+
+@app.post("/api/breakout/deactivate")
+async def deactivate_breakout():
+    """Deactivate breakout strategy."""
+    if breakout_strategy.config:
+        breakout_strategy.config.active = False
+    return {"status": "deactivated"}
+
+
+@app.get("/api/breakout/status")
+async def get_breakout_status():
+    """Get breakout strategy status and positions."""
+    active_positions = breakout_strategy.get_active_positions()
+    closed_positions = breakout_strategy.get_closed_positions()
+    return {
+        "active": bool(
+            breakout_strategy.config and breakout_strategy.config.active
+        ),
+        "quote_asset": breakout_strategy.quote,
+        "active_positions": len(active_positions),
+        "closed_positions": len(closed_positions),
+        "positions": [p.model_dump() for p in active_positions],
+        "history": [p.model_dump() for p in closed_positions[-10:]],
+        "activity_log": breakout_strategy.activity_log[-20:],
+    }
+
+
+@app.post("/api/breakout/{position_id}/close")
+async def close_breakout_position(position_id: str):
+    """Close a specific breakout position."""
+    result = await breakout_strategy.close_position_by_id(position_id)
+    if result:
+        return {"status": "closed", "position": result}
+    return {"error": "Position not found", "status": "error"}
+
+
+@app.post("/api/breakout/close-all")
+async def close_all_breakout_positions():
+    """Close all breakout positions."""
+    closed = await breakout_strategy.close_all()
     return {"status": "closed", "positions_closed": closed}

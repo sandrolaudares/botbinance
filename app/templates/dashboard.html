@@ -39,11 +39,58 @@
         <!-- Strategy Tabs -->
         <div class="tabs">
             <button class="tab active" data-tab="scalping">Scalping</button>
+            <button class="tab" data-tab="breakout">Breakout</button>
             <button class="tab" data-tab="smart-trade">Smart Trade</button>
             <button class="tab" data-tab="auto-invest">Auto-Invest</button>
             <button class="tab" data-tab="market">Mercado</button>
             <button class="tab" data-tab="trades">Histórico</button>
         </div>
+
+        <!-- Breakout Tab -->
+        <section class="tab-content" id="tab-breakout">
+            <div class="card">
+                <h3>Breakout Trading (USDT)</h3>
+                <p class="description">Detecta consolidações e entra no rompimento com volume. TP escalonado: 50% no +3%, trailing no restante até +8%. SL apertado -1.5%.</p>
+                <form id="breakout-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Trade Normal (USDT)</label>
+                            <input type="number" id="brk-amount" value="15" min="5" step="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Trade Forte (USDT)</label>
+                            <input type="number" id="brk-amount-strong" value="25" min="5" step="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Trades</label>
+                            <input type="number" id="brk-max" value="10" min="1" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>TP1 (%)</label>
+                            <input type="number" id="brk-tp1" value="3.0" step="0.5" min="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label>TP2 (%)</label>
+                            <input type="number" id="brk-tp2" value="8.0" step="0.5" min="1.0">
+                        </div>
+                        <div class="form-group">
+                            <label>Stop Loss (%)</label>
+                            <input type="number" id="brk-sl" value="1.5" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="btn-activate-brk">Ativar Breakout</button>
+                    <button type="button" class="btn btn-danger" id="btn-deactivate-brk" style="display:none">Desativar</button>
+                </form>
+                <div id="breakout-status" class="status-container" style="margin-top:15px"></div>
+                <div id="breakout-positions" style="margin-top:10px"></div>
+                <div id="breakout-activity" style="margin-top:15px">
+                    <h4>Atividade Breakout</h4>
+                    <div id="breakout-log" style="max-height:300px;overflow-y:auto;background:#1a1a2e;border-radius:8px;padding:10px;font-family:monospace;font-size:12px"></div>
+                </div>
+            </div>
+        </section>
 
         <!-- Smart Trade Tab -->
         <section class="tab-content" id="tab-smart-trade">

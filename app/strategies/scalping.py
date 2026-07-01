@@ -41,6 +41,8 @@ class ScalpConfig(BaseModel):
     trail_from_entry: bool = True  # Start trailing immediately
     reentry_enabled: bool = True  # Re-enter after TP if still rising
     blacklist_minutes: int = 30  # Cooldown after SL
+    trend_filter: bool = True  # Only buy when BTC/ETH trending up
+    accumulation_enabled: bool = True  # Double size on 3rd+ re-entry
 
 
 class ScalpPosition(BaseModel):
@@ -80,6 +82,8 @@ class ScalpingStrategy:
         self._initialized: bool = False
         self.activity_log: list[dict] = []
         self._blacklist: dict[str, datetime] = {}  # symbol -> blacklist_until
+        self._reentry_count: dict[str, int] = {}  # symbol -> re-entry count
+        self._market_trend: Optional[str] = None  # "up", "down", "neutral"
 
     def _log_activity(self, action: str, symbol: str, details: str = ""):
         entry = {
@@ -116,6 +120,29 @@ class ScalpingStrategy:
             return
         mins = self.config.blacklist_minutes
         self._blacklist[symbol] = datetime.now(UTC) + timedelta(minutes=mins)
+
+    async def _check_market_trend(self) -> str:
+        """Check BTC + ETH trend to filter entries."""
+        try:
+            btc_klines = await binance_client.get_klines(
+                f"BTC{self.quote}", interval="15m", limit=4
+            )
+            eth_klines = await binance_client.get_klines(
+                f"ETH{self.quote}", interval="15m", limit=4
+            )
+            up_count = 0
+            for klines in [btc_klines, eth_klines]:
+                if klines and len(klines) >= 3:
+                    closes = [float(k[4]) for k in klines]
+                    if closes[-1] > closes[-3]:
+                        up_count += 1
+            if up_count == 2:
+                return "up"
+            if up_count == 0:
+                return "down"
+            return "neutral"
+        except Exception:
+            return "neutral"
 
     async def setup(self, config: ScalpConfig) -> bool:
         self.config = config
@@ -265,6 +292,16 @@ class ScalpingStrategy:
         if len(active) >= self.config.max_concurrent_trades:
             return []
 
+        # Trend filter: skip buying when BTC+ETH both dropping
+        if self.config.trend_filter:
+            self._market_trend = await self._check_market_trend()
+            if self._market_trend == "down":
+                self._log_activity(
+                    "TREND FILTER", "BTC+ETH",
+                    "Mercado em queda - pulando compras"
+                )
+                return []
+
         open_markets = await self._get_open_markets()
         tickers = await binance_client.get_ticker_24h()
         if not tickers:
@@ -403,11 +440,20 @@ class ScalpingStrategy:
         if len(active) >= self.config.max_concurrent_trades:
             return None
 
-        # Dynamic position sizing
+        # Dynamic position sizing + accumulation
         if strength == "strong":
             amt = self.config.amount_per_trade_strong
         else:
             amt = self.config.amount_per_trade
+
+        # Accumulation: double size on 3rd+ re-entry for same symbol
+        reentry_n = self._reentry_count.get(symbol, 0)
+        if self.config.accumulation_enabled and reentry_n >= 2:
+            amt = amt * 2
+            logger.info(
+                f"ACCUMULATION: {symbol} re-entry #{reentry_n+1}, "
+                f"doubling to {amt} {self.quote}"
+            )
 
         result = await trading_engine.buy_with_quote(
             symbol, amt, StrategyType.SMART_TRADE
@@ -434,6 +480,8 @@ class ScalpingStrategy:
         self.positions.append(position)
 
         label = "FORTE" if strength == "strong" else "NORMAL"
+        if reentry_n >= 2:
+            label += " ACUM"
         logger.info(
             f"SCALP MOMENTUM BUY [{label}]: {symbol} @ {result.price:.6f}, "
             f"qty={result.quantity:.8f}, {amt} {q}"
@@ -569,15 +617,23 @@ class ScalpingStrategy:
                 and pos.pnl_percent
                 and pos.pnl_percent > 0.5
             ):
+                # Track re-entry count for accumulation
+                count = self._reentry_count.get(pos.symbol, 0) + 1
+                self._reentry_count[pos.symbol] = count
                 current = await binance_client.get_symbol_price(pos.symbol)
                 if current and current >= price * 0.998:
                     self._log_activity(
                         "RE-ENTRY SINAL", pos.symbol,
-                        f"Ainda subindo apos TP (+{pos.pnl_percent:.1f}%)"
+                        f"Ainda subindo apos TP "
+                        f"(+{pos.pnl_percent:.1f}%, "
+                        f"re-entry #{count})"
                     )
                     await self.execute_momentum_scalp(
                         pos.symbol, pos.signal_strength
                     )
+            elif reason == "STOP_LOSS":
+                # Reset re-entry count on SL
+                self._reentry_count.pop(pos.symbol, None)
         else:
             logger.error(f"Scalp: failed to sell {pos.symbol}")
 

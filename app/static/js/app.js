@@ -272,9 +272,8 @@ function initTabs() {
             
             // Refresh relevant data
             switch(tab.dataset.tab) {
-                case 'grid': updateGridStatus(); break;
-                case 'dca': updateDCAStatus(); break;
                 case 'auto-invest': updateAutoInvestStatus(); break;
+                case 'breakout': updateBreakoutStatus(); break;
                 case 'market': refreshMarket(); break;
                 case 'trades': updateTrades(); break;
             }
@@ -472,6 +471,107 @@ async function closeScalpPosition(posId) {
     updateScalpingStatus();
 }
 
+// ========== Breakout ==========
+
+async function activateBreakout(e) {
+    e.preventDefault();
+    const config = {
+        active: true,
+        quote_asset: "USDT",
+        amount_per_trade: parseFloat(document.getElementById('brk-amount').value),
+        amount_per_trade_strong: parseFloat(document.getElementById('brk-amount-strong').value),
+        max_concurrent_trades: parseInt(document.getElementById('brk-max').value),
+        tp1_percent: parseFloat(document.getElementById('brk-tp1').value),
+        tp2_percent: parseFloat(document.getElementById('brk-tp2').value),
+        stop_loss_percent: parseFloat(document.getElementById('brk-sl').value),
+    };
+    const result = await apiCall('/api/breakout/activate', 'POST', config);
+    if (result && result.status === 'activated') {
+        document.getElementById('btn-activate-brk').style.display = 'none';
+        document.getElementById('btn-deactivate-brk').style.display = 'inline-block';
+        updateBreakoutStatus();
+    } else {
+        alert(`Erro: ${result?.error || 'Falha ao ativar Breakout'}`);
+    }
+}
+
+async function deactivateBreakout() {
+    await apiCall('/api/breakout/deactivate', 'POST');
+    document.getElementById('btn-activate-brk').style.display = 'inline-block';
+    document.getElementById('btn-deactivate-brk').style.display = 'none';
+    document.getElementById('breakout-status').innerHTML = '<p>Breakout desativado</p>';
+}
+
+async function updateBreakoutStatus() {
+    const data = await apiCall('/api/breakout/status');
+    if (!data) return;
+
+    const statusEl = document.getElementById('breakout-status');
+    const posEl = document.getElementById('breakout-positions');
+
+    if (data.active) {
+        document.getElementById('btn-activate-brk').style.display = 'none';
+        document.getElementById('btn-deactivate-brk').style.display = 'inline-block';
+        statusEl.innerHTML = `<p><strong>ATIVO (${data.quote_asset || 'USDT'})</strong> | Posições abertas: ${data.active_positions}</p>`;
+    } else {
+        statusEl.innerHTML = '<p>Breakout desativado</p>';
+    }
+
+    if (data.positions && data.positions.length > 0) {
+        let html = '<table class="data-table"><thead><tr><th>Par</th><th>Entrada</th><th>Resistência</th><th>TP1</th><th>Peak</th><th>Restante</th><th>Ação</th></tr></thead><tbody>';
+        for (const pos of data.positions) {
+            const tp1 = pos.tp1_hit ? 'HIT' : 'Aguardando';
+            html += `<tr>
+                <td>${pos.symbol}</td>
+                <td>${pos.entry_price.toFixed(6)}</td>
+                <td>${pos.resistance_level.toFixed(6)}</td>
+                <td>${tp1}</td>
+                <td>${pos.highest_price.toFixed(6)}</td>
+                <td>${pos.remaining_quantity.toFixed(6)}</td>
+                <td><button class="btn btn-small btn-danger" onclick="closeBreakoutPosition('${pos.id}')">Fechar</button></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        posEl.innerHTML = html;
+    } else {
+        posEl.innerHTML = data.active ? '<p>Aguardando breakouts...</p>' : '';
+    }
+
+    if (data.history && data.history.length > 0) {
+        let hist = '<h4 style="margin-top:10px">Histórico</h4><table class="data-table"><thead><tr><th>Par</th><th>PnL</th><th>Motivo</th></tr></thead><tbody>';
+        for (const h of data.history) {
+            const pnl = h.pnl_percent != null ? `${h.pnl_percent.toFixed(2)}%` : '-';
+            const cls = (h.pnl_percent || 0) >= 0 ? 'profit' : 'loss';
+            hist += `<tr><td>${h.symbol}</td><td class="${cls}">${pnl}</td><td>${h.reason}</td></tr>`;
+        }
+        hist += '</tbody></table>';
+        posEl.innerHTML += hist;
+    }
+
+    const logEl = document.getElementById('breakout-log');
+    if (data.activity_log && data.activity_log.length > 0) {
+        let logHtml = '';
+        for (const entry of data.activity_log.slice().reverse()) {
+            const time = new Date(entry.time).toLocaleTimeString('pt-BR');
+            let color = '#aaa';
+            if (entry.action.includes('COMPRA')) color = '#4ecdc4';
+            else if (entry.action.includes('VENDA')) color = '#ff6b6b';
+            else if (entry.action.includes('BREAKOUT')) color = '#ffd93d';
+            else if (entry.action === 'SCAN') color = '#666';
+            logHtml += `<div style="margin-bottom:4px;color:${color}"><span style="color:#888">[${time}]</span> <strong>${entry.action}</strong> ${entry.symbol} <span style="color:#999">${entry.details}</span></div>`;
+        }
+        logEl.innerHTML = logHtml;
+    } else {
+        logEl.innerHTML = '<p style="color:#666">Aguardando atividade...</p>';
+    }
+}
+
+async function closeBreakoutPosition(posId) {
+    if (!confirm('Fechar esta posição de breakout?')) return;
+    await apiCall(`/api/breakout/${posId}/close`, 'POST');
+    updateBreakoutStatus();
+}
+
 // ========== Event Listeners ==========
 
 function initEventListeners() {
@@ -480,6 +580,8 @@ function initEventListeners() {
     document.getElementById('btn-close-all-st').addEventListener('click', closeAllSmartTrades);
     document.getElementById('scalping-form').addEventListener('submit', activateScalping);
     document.getElementById('btn-deactivate-scalp').addEventListener('click', deactivateScalping);
+    document.getElementById('breakout-form').addEventListener('submit', activateBreakout);
+    document.getElementById('btn-deactivate-brk').addEventListener('click', deactivateBreakout);
     document.getElementById('auto-invest-form').addEventListener('submit', setupAutoInvest);
     document.getElementById('btn-rebalance').addEventListener('click', triggerRebalance);
     document.getElementById('btn-scan').addEventListener('click', scanMarket);
@@ -540,6 +642,7 @@ function startAutoRefresh() {
     setInterval(updatePortfolio, 15000); // Every 15s
     setInterval(updateTradingMode, 30000); // Every 30s
     setInterval(updateScalpingStatus, 10000); // Every 10s (real-time feed)
+    setInterval(updateBreakoutStatus, 10000); // Every 10s
 }
 
 // ========== Initialize ==========
@@ -550,4 +653,5 @@ document.addEventListener('DOMContentLoaded', () => {
     startAutoRefresh();
     updateSmartTradeStatus();
     updateScalpingStatus();
+    updateBreakoutStatus();
 });
