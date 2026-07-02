@@ -1,12 +1,17 @@
-"""Aggressive scalping strategy for Binance - V2 (redesigned for effectiveness).
+"""Scalping strategy V3 - focused on LOSS REDUCTION.
 
-Key changes from V1:
-- Larger position sizes ($30-50) for meaningful profits
-- Better signal quality: volume spike + kline acceleration required
-- Proper risk/reward: 2.5% TP vs 1.2% SL (~2:1 ratio)
-- Smarter trailing: activates after 1% profit, 0.8% distance
-- Fewer concurrent trades with higher confidence
-- Multi-factor momentum scoring
+Core philosophy: It's better to miss a trade than to take a bad one.
+
+Key principles:
+- Only trade highly liquid pairs ($500k+ 24h volume)
+- BTC/ETH macro filter: no buys when market is falling
+- Very strict entry: need 4+/6 momentum factors
+- Wider SL (2%) with smaller positions ($20) = same dollar risk, fewer false SL
+- Let winners run with trailing (no hard TP, only trail)
+- Max 5 concurrent positions (concentrated, manageable)
+- Daily loss limit: pause 4h if losses > $40
+- Disable dip-buying (main source of losses - catching falling knives)
+- 2-hour cooldown per symbol after any exit
 """
 
 import logging
@@ -23,41 +28,43 @@ logger = logging.getLogger(__name__)
 
 
 class ScalpConfig(BaseModel):
-    """Configuration for the scalping strategy."""
+    """Configuration - conservative entries, let winners run."""
 
     active: bool = False
     quote_asset: str = "USDT"
-    # Position sizing - meaningful amounts for real profit
-    amount_per_trade: float = 30.0  # Normal signal
-    amount_per_trade_strong: float = 50.0  # Strong signal (multi-factor)
-    # Exit parameters - 2:1 risk/reward ratio
-    take_profit_percent: float = 2.5  # Hard TP
-    trailing_activation: float = 1.2  # Activate trail after this % gain
-    trailing_percent: float = 0.8  # Trail distance once activated
-    stop_loss_percent: float = 1.2  # Max loss per trade
+    # Position sizing - smaller with wider stops = same risk, fewer SL hits
+    amount_per_trade: float = 20.0
+    amount_per_trade_strong: float = 35.0
+    # Exit - NO hard TP, only trailing. Wider SL to avoid noise.
+    stop_loss_percent: float = 2.0  # Wider SL = fewer false triggers
+    trailing_activation: float = 1.5  # Trail activates after +1.5%
+    trailing_percent: float = 1.0  # 1% trail distance (wider = less whipsaw)
     # Time management
-    max_hold_minutes: int = 120  # 2 hours max
-    stale_exit_minutes: int = 45  # Exit at breakeven if flat after 45min
-    stale_exit_threshold: float = 0.15  # "Flat" = less than 0.15% movement
-    # Capacity
-    max_concurrent_trades: int = 15
-    max_trades_per_cycle: int = 3
-    cycle_seconds: int = 45
-    # Signal filters - quality over quantity
-    min_volume_24h: float = 100000.0  # Only liquid pairs ($100k+)
-    min_momentum_score: int = 3  # Need 3+ factors to enter (out of 6)
-    min_price_change_5min: float = 0.5  # Min 0.5% move in last 15min
-    min_volume_spike: float = 2.0  # Volume must be 2x recent average
-    # Re-entry and blacklist
+    max_hold_minutes: int = 180  # 3 hours max
+    stale_exit_minutes: int = 60  # Exit if flat after 1 hour
+    stale_exit_threshold: float = 0.3  # Less than 0.3% = flat
+    # Capacity - concentrated
+    max_concurrent_trades: int = 5  # Fewer = more focused
+    max_trades_per_cycle: int = 2  # Max 2 new entries per cycle
+    cycle_seconds: int = 60  # 1 minute cycles
+    # Signal filters - VERY strict
+    min_volume_24h: float = 300000.0  # Liquid pairs ($300k+)
+    min_momentum_score: int = 3  # Need 3+/6 with all other protections
+    min_price_change_5min: float = 0.5  # Recent move in klines
+    min_volume_spike: float = 2.0  # Volume above average
+    max_price_change_24h: float = 15.0  # Don't chase parabolic moves
+    # Macro filter
+    btc_filter_enabled: bool = True  # Skip all buys if BTC falling
+    btc_min_change_1h: float = -1.0  # BTC must not be down >1% in 1h
+    # Risk management
+    blacklist_minutes: int = 120  # 2h cooldown per symbol after exit
+    daily_loss_limit: float = 40.0  # Pause after $40 daily loss
+    pause_hours: int = 4  # Hours to pause after loss limit
+    # Re-entry
     reentry_enabled: bool = True
-    blacklist_minutes: int = 60  # Longer cooldown after SL
-    accumulation_enabled: bool = True
-    # Bearish/dip-buy
-    bearish_enabled: bool = True
-    bearish_drop_threshold: float = -4.0  # Deeper dip required
-    bearish_bounce_min: float = 1.0  # Stronger bounce confirmation
-    bearish_tp_percent: float = 2.0
-    bearish_sl_percent: float = 1.0
+    accumulation_enabled: bool = False  # Disabled - don't double down
+    # Bearish DISABLED by default (main loss source)
+    bearish_enabled: bool = False
 
 
 class ScalpPosition(BaseModel):
@@ -78,20 +85,25 @@ class ScalpPosition(BaseModel):
     closed_at: Optional[str] = None
     close_price: Optional[float] = None
     pnl_percent: Optional[float] = None
+    pnl_usdt: Optional[float] = None
 
 
 class ScalpingStrategy:
-    """Aggressive scalping V2 - quality signals, proper risk/reward.
+    """Scalping V3 - Loss reduction focused.
 
-    Entry conditions (multi-factor momentum score):
-    1. 5min kline shows >0.5% move in last 15min
-    2. Volume spike: recent 3 candles > 2x previous 3
-    3. Price above VWAP (weighted avg price)
-    4. 2+ consecutive green candles
-    5. 24h change positive (>1%)
-    6. Kline acceleration (each candle bigger than last)
+    Entry requires ALL of:
+    1. BTC not falling (macro filter)
+    2. Momentum score 4+/6
+    3. Not in 24h parabolic (< +15%)
+    4. High volume ($500k+)
+    5. Volume spiking (2.5x)
+    6. Not blacklisted (2h cooldown)
 
-    Need 3+ factors (configurable) to enter.
+    Exit:
+    - SL at -2% (wide enough to avoid noise)
+    - Trail activates at +1.5%, trails at 1%
+    - Stale exit: flat after 60min
+    - Max hold: 3 hours
     """
 
     def __init__(self):
@@ -107,7 +119,11 @@ class ScalpingStrategy:
             "wins": 0,
             "losses": 0,
             "total_pnl_pct": 0.0,
+            "total_pnl_usdt": 0.0,
+            "daily_loss_usdt": 0.0,
+            "last_reset": datetime.now(UTC).isoformat(),
         }
+        self._paused_until: Optional[datetime] = None
 
     def _log_activity(self, action: str, symbol: str, details: str = ""):
         entry = {
@@ -117,8 +133,8 @@ class ScalpingStrategy:
             "details": details,
         }
         self.activity_log.append(entry)
-        if len(self.activity_log) > 150:
-            self.activity_log = self.activity_log[-150:]
+        if len(self.activity_log) > 200:
+            self.activity_log = self.activity_log[-200:]
 
     def get_active_positions(self) -> list[ScalpPosition]:
         return [p for p in self.positions if p.status == "ACTIVE"]
@@ -146,19 +162,40 @@ class ScalpingStrategy:
             minutes=self.config.blacklist_minutes
         )
 
+    def _check_daily_reset(self):
+        """Reset daily loss counter at midnight UTC."""
+        last = datetime.fromisoformat(self._trade_stats["last_reset"])
+        now = datetime.now(UTC)
+        if now.date() > last.date():
+            self._trade_stats["daily_loss_usdt"] = 0.0
+            self._trade_stats["last_reset"] = now.isoformat()
+
+    def _is_paused(self) -> bool:
+        """Check if trading is paused due to loss limit."""
+        if not self._paused_until:
+            return False
+        if datetime.now(UTC) > self._paused_until:
+            self._paused_until = None
+            self._log_activity(
+                "RETOMADO", "sistema",
+                "Pausa por perda encerrada, voltando a operar"
+            )
+            return False
+        return True
+
     async def setup(self, config: ScalpConfig) -> bool:
         self.config = config
         if config.active and not self._initialized:
             await self._initialize_known_pairs()
         logger.info(
-            f"Scalping V2: ${config.amount_per_trade}/"
-            f"${config.amount_per_trade_strong} per trade, "
-            f"TP={config.take_profit_percent}%, "
+            f"Scalping V3 (loss-reduction): "
+            f"${config.amount_per_trade}/${config.amount_per_trade_strong}, "
             f"SL={config.stop_loss_percent}%, "
             f"Trail@{config.trailing_activation}%/{config.trailing_percent}%, "
-            f"MaxHold={config.max_hold_minutes}min, "
             f"Max={config.max_concurrent_trades}, "
-            f"MinScore={config.min_momentum_score}/6"
+            f"MinScore={config.min_momentum_score}/6, "
+            f"BTC filter={config.btc_filter_enabled}, "
+            f"LossLimit=${config.daily_loss_limit}"
         )
         return True
 
@@ -167,8 +204,7 @@ class ScalpingStrategy:
         self.known_pairs = set(pairs)
         self._initialized = True
         logger.info(
-            f"Scalping V2 initialized: {len(self.known_pairs)} "
-            f"{self.quote} pairs tracked"
+            f"Scalping V3: {len(self.known_pairs)} {self.quote} pairs"
         )
 
     async def _fetch_tradeable_pairs(self) -> list[str]:
@@ -189,7 +225,7 @@ class ScalpingStrategy:
                     pairs.append(sym)
             return pairs
         except Exception as e:
-            logger.error(f"Error fetching {self.quote} pairs: {e}")
+            logger.error(f"Error fetching pairs: {e}")
             return []
 
     async def scan_for_new_listings(self) -> list[str]:
@@ -203,9 +239,46 @@ class ScalpingStrategy:
         current_set = set(current_pairs)
         new_pairs = current_set - self.known_pairs
         if new_pairs:
-            logger.info(f"NEW LISTINGS DETECTED: {new_pairs}")
+            logger.info(f"NEW LISTINGS: {new_pairs}")
         self.known_pairs = current_set
         return list(new_pairs)
+
+    async def _check_btc_trend(self) -> bool:
+        """Check if BTC is not falling (macro filter).
+
+        Returns True if safe to trade, False if market is falling.
+        """
+        if not self.config or not self.config.btc_filter_enabled:
+            return True
+
+        try:
+            # Check BTC 1h klines for recent trend
+            klines = await binance_client.get_klines(
+                "BTCUSDT", interval="15m", limit=4
+            )
+            if not klines or len(klines) < 4:
+                return True  # Can't determine, allow trading
+
+            # Price change over last hour (4x15min candles)
+            open_1h = float(klines[0][1])
+            close_now = float(klines[-1][4])
+            if open_1h == 0:
+                return True
+
+            change_1h = ((close_now - open_1h) / open_1h) * 100
+
+            if change_1h < self.config.btc_min_change_1h:
+                self._log_activity(
+                    "MACRO FILTER", "BTCUSDT",
+                    f"BTC {change_1h:+.2f}% (1h) < "
+                    f"{self.config.btc_min_change_1h}% → skipping buys"
+                )
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"BTC trend check error: {e}")
+            return True  # Error = allow trading
 
     async def _analyze_klines(self, symbol: str) -> Optional[dict]:
         """Deep kline analysis for momentum scoring."""
@@ -222,19 +295,19 @@ class ScalpingStrategy:
             lows = [float(k[3]) for k in klines]
             volumes = [float(k[5]) for k in klines]
 
-            # 1. Recent price change (last 3 candles = 15min)
+            # Recent price change (last 3 candles = 15min)
             if closes[-4] == 0:
                 return None
             recent_change = (
                 (closes[-1] - closes[-4]) / closes[-4]
             ) * 100
 
-            # 2. Volume spike: last 3 candles vs previous 3
+            # Volume spike: last 3 candles vs previous 6
             recent_vol = sum(volumes[-3:])
-            prev_vol = sum(volumes[-6:-3])
+            prev_vol = sum(volumes[-9:-3]) / 2  # Average of prev 6 as 3
             vol_ratio = recent_vol / prev_vol if prev_vol > 0 else 1.0
 
-            # 3. Consecutive green candles
+            # Consecutive green candles (from most recent)
             green_count = 0
             for i in range(len(closes) - 1, max(len(closes) - 7, 0), -1):
                 if closes[i] > opens[i]:
@@ -242,35 +315,33 @@ class ScalpingStrategy:
                 else:
                     break
 
-            # 4. Acceleration: each recent candle body bigger than previous
+            # Acceleration: recent candle bodies getting bigger
             bodies = [
-                abs(closes[i] - opens[i])
+                closes[i] - opens[i]
                 for i in range(len(closes) - 3, len(closes))
             ]
             accelerating = (
                 len(bodies) >= 3
-                and bodies[-1] > bodies[-2] > bodies[-3]
-                and closes[-1] > opens[-1]  # Last candle is green
+                and all(b > 0 for b in bodies)  # All green
+                and bodies[-1] > bodies[-2]  # Getting bigger
             )
 
-            # 5. Price position vs range (higher = stronger)
+            # Price position in range (0=low, 1=high)
             recent_high = max(highs[-6:])
             recent_low = min(lows[-6:])
             price_range = recent_high - recent_low
-            if price_range > 0:
-                price_position = (
-                    (closes[-1] - recent_low) / price_range
-                )
-            else:
-                price_position = 0.5
-
-            # 6. Average candle size for volatility assessment
-            avg_body = sum(
-                abs(closes[i] - opens[i]) for i in range(-6, 0)
-            ) / 6
-            volatility = (
-                (avg_body / closes[-1]) * 100 if closes[-1] > 0 else 0
+            price_position = (
+                (closes[-1] - recent_low) / price_range
+                if price_range > 0 else 0.5
             )
+
+            # Pullback check: is price pulling back slightly from high?
+            # (better entry than at the exact top)
+            from_high = (
+                (recent_high - closes[-1]) / recent_high * 100
+                if recent_high > 0 else 0
+            )
+            is_pullback_entry = 0.1 < from_high < 0.5  # Slight dip
 
             return {
                 "recent_change": recent_change,
@@ -278,11 +349,11 @@ class ScalpingStrategy:
                 "green_count": green_count,
                 "accelerating": accelerating,
                 "price_position": price_position,
+                "is_pullback_entry": is_pullback_entry,
                 "last_price": closes[-1],
-                "volatility": volatility,
             }
         except Exception as e:
-            logger.error(f"Kline analysis error {symbol}: {e}")
+            logger.error(f"Kline error {symbol}: {e}")
             return None
 
     def _calculate_momentum_score(
@@ -292,36 +363,37 @@ class ScalpingStrategy:
         last_price: float,
         kline_data: Optional[dict],
     ) -> int:
-        """Calculate multi-factor momentum score (0-6)."""
+        """Multi-factor momentum score (0-6). Need 4+ to enter."""
         if not kline_data:
             return 0
 
         score = 0
 
-        # Factor 1: Recent 5min momentum > threshold
-        if kline_data["recent_change"] >= (
-            self.config.min_price_change_5min if self.config else 0.5
-        ):
+        # Factor 1: Strong recent 5min momentum
+        min_change = (
+            self.config.min_price_change_5min if self.config else 0.8
+        )
+        if kline_data["recent_change"] >= min_change:
             score += 1
 
-        # Factor 2: Volume spike
-        min_spike = self.config.min_volume_spike if self.config else 2.0
+        # Factor 2: Clear volume spike
+        min_spike = self.config.min_volume_spike if self.config else 2.5
         if kline_data["vol_ratio"] >= min_spike:
             score += 1
 
-        # Factor 3: Price above VWAP (above weighted avg)
-        if weighted_avg > 0 and last_price > weighted_avg * 1.002:
+        # Factor 3: Price above VWAP
+        if weighted_avg > 0 and last_price > weighted_avg * 1.003:
             score += 1
 
-        # Factor 4: Consecutive green candles (2+)
+        # Factor 4: 2+ consecutive green candles
         if kline_data["green_count"] >= 2:
             score += 1
 
-        # Factor 5: 24h change positive and strong
-        if price_change_24h > 1.0:
+        # Factor 5: Healthy 24h change (positive but not overextended)
+        if 1.0 < price_change_24h < 12.0:
             score += 1
 
-        # Factor 6: Kline acceleration (momentum building)
+        # Factor 6: Momentum acceleration
         if kline_data["accelerating"]:
             score += 1
 
@@ -340,16 +412,25 @@ class ScalpingStrategy:
                 and not s.get("symbol", "").startswith("LD")
             }
         except Exception as e:
-            logger.error(f"Error fetching open markets: {e}")
+            logger.error(f"Error fetching markets: {e}")
             return set()
 
     async def scan_momentum_opportunities(self) -> list[dict]:
-        """Find high-quality momentum entries using multi-factor scoring."""
+        """Find high-confidence entries with strict multi-factor filter."""
         if not self.config:
             return []
 
         active = self.get_active_positions()
         if len(active) >= self.config.max_concurrent_trades:
+            self._log_activity(
+                "CAPACIDADE", "mercado",
+                f"Max {self.config.max_concurrent_trades} posições atingido"
+            )
+            return []
+
+        # Macro filter first (saves API calls if market is down)
+        btc_ok = await self._check_btc_trend()
+        if not btc_ok:
             return []
 
         open_markets = await self._get_open_markets()
@@ -382,11 +463,13 @@ class ScalpingStrategy:
             except (ValueError, TypeError):
                 continue
 
-            # Pre-filter: decent volume and some positive movement
+            # Strict pre-filters
             if volume_24h < self.config.min_volume_24h:
                 continue
-            if price_change < 0.5:  # At least slightly positive 24h
+            if price_change < 1.0:  # Must be positive
                 continue
+            if price_change > self.config.max_price_change_24h:
+                continue  # Don't chase parabolic
 
             pre_filter.append({
                 "symbol": symbol,
@@ -396,12 +479,12 @@ class ScalpingStrategy:
                 "last_price": last_price,
             })
 
-        # Sort by 24h change - top movers first
-        pre_filter.sort(key=lambda x: x["change_24h"], reverse=True)
+        # Sort by volume (most liquid first = tighter spreads)
+        pre_filter.sort(key=lambda x: x["volume"], reverse=True)
 
-        # Analyze top candidates with klines (limit API calls)
+        # Only analyze top candidates
         slots = self.config.max_concurrent_trades - len(active)
-        max_to_analyze = min(slots * 3, 15)
+        max_to_analyze = min(slots * 4, 12)
         candidates = pre_filter[:max_to_analyze]
 
         confirmed = []
@@ -426,21 +509,21 @@ class ScalpingStrategy:
                 c["strength"] = "strong" if score >= 5 else "normal"
                 confirmed.append(c)
 
-        # Sort confirmed by score (best first)
+        # Sort by score (best first)
         confirmed.sort(key=lambda x: x["score"], reverse=True)
 
         if confirmed:
             desc = ", ".join(
-                f"{c['symbol']} score={c['score']}/6 "
+                f"{c['symbol']} {c['score']}/6 "
                 f"+{c['change_24h']:.1f}%"
                 for c in confirmed
             )
-            logger.info(f"Scalp V2 signals: {desc}")
+            logger.info(f"Scalp V3 qualified: {desc}")
 
         return confirmed
 
     async def execute_scalp(self, symbol: str) -> Optional[dict]:
-        """Buy a newly listed coin (strong sizing, high priority)."""
+        """Buy a new listing (always strong)."""
         if not self.config:
             return None
 
@@ -453,7 +536,6 @@ class ScalpingStrategy:
             symbol, amt, StrategyType.SMART_TRADE
         )
         if not result:
-            logger.error(f"Scalping: failed to buy {symbol}")
             return None
 
         position = ScalpPosition(
@@ -469,18 +551,18 @@ class ScalpingStrategy:
             created_at=datetime.now(UTC).isoformat(),
         )
         self.positions.append(position)
+        self._trade_stats["total_trades"] += 1
 
         self._log_activity(
-            "COMPRA (Nova Listagem)", symbol,
-            f"${amt:.0f} @ {result.price:.6f} "
-            f"x {result.quantity:.6f} [STRONG]"
+            "COMPRA [LISTAGEM]", symbol,
+            f"${amt:.0f} @ {result.price:.6f}"
         )
         return position.model_dump()
 
     async def execute_momentum_scalp(
-        self, symbol: str, strength: str = "normal", score: int = 3
+        self, symbol: str, strength: str = "normal", score: int = 4
     ) -> Optional[dict]:
-        """Execute a momentum scalp with proper sizing."""
+        """Execute entry on qualified momentum signal."""
         if not self.config:
             return None
 
@@ -488,23 +570,17 @@ class ScalpingStrategy:
         if len(active) >= self.config.max_concurrent_trades:
             return None
 
-        # Dynamic sizing based on signal strength
         if strength == "strong":
             amt = self.config.amount_per_trade_strong
         else:
             amt = self.config.amount_per_trade
-
-        # Accumulation on 3rd+ re-entry
-        reentry_n = self._reentry_count.get(symbol, 0)
-        if self.config.accumulation_enabled and reentry_n >= 2:
-            amt = min(amt * 1.5, 75.0)  # Cap at $75
 
         result = await trading_engine.buy_with_quote(
             symbol, amt, StrategyType.SMART_TRADE
         )
         if not result:
             self._log_activity(
-                "FALHA", symbol, "Ordem rejeitada (saldo/min notional)"
+                "FALHA", symbol, "Ordem rejeitada"
             )
             return None
 
@@ -521,6 +597,7 @@ class ScalpingStrategy:
             created_at=datetime.now(UTC).isoformat(),
         )
         self.positions.append(position)
+        self._trade_stats["total_trades"] += 1
 
         label = f"FORTE {score}/6" if strength == "strong" else f"{score}/6"
         self._log_activity(
@@ -528,7 +605,6 @@ class ScalpingStrategy:
             f"${amt:.0f} @ {result.price:.6f} "
             f"x {result.quantity:.6f}"
         )
-        self._trade_stats["total_trades"] += 1
         return position.model_dump()
 
     async def monitor_positions(self):
@@ -555,10 +631,9 @@ class ScalpingStrategy:
             pos.highest_price = current_price
 
         created = datetime.fromisoformat(pos.created_at)
-        elapsed = datetime.now(UTC) - created
-        elapsed_min = elapsed.total_seconds() / 60
+        elapsed_min = (datetime.now(UTC) - created).total_seconds() / 60
 
-        # 1. Hard Stop Loss
+        # 1. Stop Loss (wider = less noise triggers)
         if pnl_pct <= -self.config.stop_loss_percent:
             self._add_to_blacklist(pos.symbol)
             await self._close_position(pos, current_price, "STOP_LOSS")
@@ -569,7 +644,7 @@ class ScalpingStrategy:
             await self._close_position(pos, current_price, "TIMEOUT")
             return
 
-        # 3. Stale position exit (flat after N minutes -> exit near breakeven)
+        # 3. Stale exit (flat for too long)
         if (
             elapsed_min >= self.config.stale_exit_minutes
             and abs(pnl_pct) < self.config.stale_exit_threshold
@@ -577,31 +652,24 @@ class ScalpingStrategy:
             await self._close_position(pos, current_price, "STALE")
             return
 
-        # 4. Hard Take Profit
-        if pnl_pct >= self.config.take_profit_percent:
-            await self._close_position(pos, current_price, "TAKE_PROFIT")
-            return
-
-        # 5. Trailing stop logic - activate after threshold
+        # 4. Trailing stop activation
         if (
             not pos.trailing_active
             and pnl_pct >= self.config.trailing_activation
         ):
             pos.trailing_active = True
             self._log_activity(
-                "TRAIL ATIVO", pos.symbol,
-                f"Lucro +{pnl_pct:.2f}% > "
-                f"{self.config.trailing_activation}%"
+                "TRAIL ON", pos.symbol,
+                f"+{pnl_pct:.2f}% → trailing ativado"
             )
 
-        # 6. Trailing stop trigger
+        # 5. Trailing stop trigger
         if pos.trailing_active and pos.highest_price > pos.entry_price:
             drop_from_peak = (
                 (pos.highest_price - current_price) / pos.highest_price
             ) * 100
             if drop_from_peak >= self.config.trailing_percent:
-                # Only sell if we're in profit
-                if pnl_pct > 0.3:
+                if pnl_pct > 0.5:  # Only sell if still in profit
                     await self._close_position(
                         pos, current_price, "TRAILING_TP"
                     )
@@ -622,50 +690,81 @@ class ScalpingStrategy:
             pos.pnl_percent = (
                 (price - pos.entry_price) / pos.entry_price
             ) * 100
+            pos.pnl_usdt = pos.amount_quote * (pos.pnl_percent / 100)
 
             # Update stats
             if pos.pnl_percent > 0:
                 self._trade_stats["wins"] += 1
             else:
                 self._trade_stats["losses"] += 1
+                # Track daily losses for limit
+                self._trade_stats["daily_loss_usdt"] += abs(
+                    pos.pnl_usdt or 0
+                )
             self._trade_stats["total_pnl_pct"] += pos.pnl_percent
+            self._trade_stats["total_pnl_usdt"] += (pos.pnl_usdt or 0)
 
-            reason_map = {
-                "TAKE_PROFIT": "VENDA (TP)",
-                "TRAILING_TP": "VENDA (Trail)",
-                "STOP_LOSS": "VENDA (SL)",
-                "TIMEOUT": "VENDA (Timeout)",
-                "STALE": "VENDA (Flat)",
-                "MANUAL": "VENDA (Manual)",
-                "MANUAL_ALL": "VENDA (Fechar Todos)",
-            }
+            # Check daily loss limit
+            if (
+                self.config
+                and self._trade_stats["daily_loss_usdt"]
+                >= self.config.daily_loss_limit
+            ):
+                self._paused_until = datetime.now(UTC) + timedelta(
+                    hours=self.config.pause_hours
+                )
+                self._log_activity(
+                    "PAUSA", "sistema",
+                    f"Perda diária ${self._trade_stats['daily_loss_usdt']:.2f}"
+                    f" >= ${self.config.daily_loss_limit:.0f} → "
+                    f"pausado {self.config.pause_hours}h"
+                )
+
+            # Always blacklist after exit (2h cooldown)
+            self._add_to_blacklist(pos.symbol)
+
             wins = self._trade_stats["wins"]
             losses = self._trade_stats["losses"]
             total = wins + losses
             wr = (wins / total * 100) if total > 0 else 0
+            total_pnl = self._trade_stats["total_pnl_usdt"]
+
+            reason_labels = {
+                "TAKE_PROFIT": "TP",
+                "TRAILING_TP": "Trail",
+                "STOP_LOSS": "SL",
+                "TIMEOUT": "Time",
+                "STALE": "Flat",
+                "MANUAL": "Manual",
+                "MANUAL_ALL": "Manual",
+            }
+            label = reason_labels.get(reason, reason)
             self._log_activity(
-                reason_map.get(reason, f"VENDA ({reason})"),
-                pos.symbol,
-                f"PnL: {pos.pnl_percent:+.2f}% | "
-                f"${pos.amount_quote:.0f} | "
+                f"VENDA ({label})", pos.symbol,
+                f"PnL: {pos.pnl_percent:+.2f}% "
+                f"(${pos.pnl_usdt:+.2f}) | "
+                f"Total: ${total_pnl:+.2f} | "
                 f"WR: {wr:.0f}% ({wins}W/{losses}L)"
             )
 
-            # Re-entry logic
+            # Re-entry only on good exits
             if (
-                reason in ("TAKE_PROFIT", "TRAILING_TP")
+                reason == "TRAILING_TP"
                 and self.config
                 and self.config.reentry_enabled
-                and pos.pnl_percent > 0.8
+                and pos.pnl_percent
+                and pos.pnl_percent > 1.5
             ):
                 count = self._reentry_count.get(pos.symbol, 0) + 1
                 self._reentry_count[pos.symbol] = count
-                # Check if still rising
+                # Remove from blacklist for re-entry
+                self._blacklist.pop(pos.symbol, None)
                 current = await binance_client.get_symbol_price(pos.symbol)
                 if current and current >= price * 0.999:
                     self._log_activity(
                         "RE-ENTRY", pos.symbol,
-                        f"Ainda subindo (#{count})"
+                        f"Trail TP +{pos.pnl_percent:.1f}%, "
+                        f"still rising (#{count})"
                     )
                     await self.execute_momentum_scalp(
                         pos.symbol, pos.signal_strength, pos.momentum_score
@@ -675,7 +774,7 @@ class ScalpingStrategy:
         else:
             logger.error(f"Failed to sell {pos.symbol}")
             self._log_activity(
-                "ERRO VENDA", pos.symbol, "Falha ao executar venda"
+                "ERRO VENDA", pos.symbol, "Falha ao vender"
             )
 
     async def close_position_by_id(
@@ -699,36 +798,50 @@ class ScalpingStrategy:
         return closed
 
     async def run_cycle(self):
-        """Run one full cycle: scan + buy + monitor.
-
-        Called by the scheduler every ~45 seconds.
-        """
+        """Run one cycle. Called every 60 seconds."""
         if not self.config or not self.config.active:
             return
 
+        # Check daily reset
+        self._check_daily_reset()
+
+        # Check if paused
+        if self._is_paused():
+            remaining = (
+                self._paused_until - datetime.now(UTC)
+            ).total_seconds() / 60 if self._paused_until else 0
+            self._log_activity(
+                "PAUSADO", "sistema",
+                f"Retoma em {remaining:.0f}min (limite de perda atingido)"
+            )
+            # Still monitor existing positions even when paused
+            await self.monitor_positions()
+            return
+
         active_count = len(self.get_active_positions())
-        bl_count = len(self._blacklist)
         wins = self._trade_stats["wins"]
         losses = self._trade_stats["losses"]
-        total_pnl = self._trade_stats["total_pnl_pct"]
+        total_pnl = self._trade_stats["total_pnl_usdt"]
+        daily_loss = self._trade_stats["daily_loss_usdt"]
 
         self._log_activity(
             "SCAN", "mercado",
-            f"{active_count} pos | {bl_count} BL | "
-            f"PnL: {total_pnl:+.2f}% ({wins}W/{losses}L)"
+            f"{active_count}/{self.config.max_concurrent_trades} pos | "
+            f"PnL: ${total_pnl:+.2f} ({wins}W/{losses}L) | "
+            f"DayLoss: ${daily_loss:.2f}"
         )
 
-        # Scan for new listings (always)
+        # Scan for new listings
         new_pairs = await self.scan_for_new_listings()
         if new_pairs:
             self._log_activity(
-                "NOVA LISTAGEM", ", ".join(new_pairs),
+                "LISTAGEM", ", ".join(new_pairs),
                 f"{len(new_pairs)} nova(s)!"
             )
         for symbol in new_pairs:
             await self.execute_scalp(symbol)
 
-        # Scan momentum (multi-factor scoring)
+        # Scan momentum (strict filtering)
         momentum_signals = await self.scan_momentum_opportunities()
         if momentum_signals:
             desc = ", ".join(
@@ -736,173 +849,25 @@ class ScalpingStrategy:
                 for s in momentum_signals
             )
             self._log_activity(
-                "MOMENTUM", desc,
-                f"{len(momentum_signals)} sinais qualificados"
+                "SINAL", desc,
+                f"{len(momentum_signals)} qualificados"
             )
         for signal in momentum_signals:
             await self.execute_momentum_scalp(
                 signal["symbol"], signal["strength"], signal["score"]
             )
 
-        # Bearish dip-buy
-        if self.config.bearish_enabled:
-            bearish_signals = await self.scan_bearish_opportunities()
-            if bearish_signals:
-                desc = ", ".join(
-                    f"{s['symbol']}({s['drop']:.0f}%)"
-                    for s in bearish_signals
-                )
-                self._log_activity(
-                    "DIP-BUY", desc,
-                    f"{len(bearish_signals)} bounces"
-                )
-            for signal in bearish_signals:
-                await self.execute_bearish_scalp(
-                    signal["symbol"], signal["strength"]
-                )
-
         # Monitor existing positions
         await self.monitor_positions()
 
+    # Kept for API compatibility but disabled by default
     async def scan_bearish_opportunities(self) -> list[dict]:
-        """Find deep dips showing strong bounce (confirmed reversal)."""
-        if not self.config or not self.config.bearish_enabled:
-            return []
-
-        active = self.get_active_positions()
-        if len(active) >= self.config.max_concurrent_trades:
-            return []
-
-        open_markets = await self._get_open_markets()
-        tickers = await binance_client.get_ticker_24h()
-        if not tickers:
-            return []
-
-        suffix = self.quote
-        candidates = []
-        active_symbols = {p.symbol for p in active}
-
-        for t in tickers:
-            symbol = t.get("symbol", "")
-            if not symbol.endswith(suffix):
-                continue
-            if symbol.startswith("LD") or "1MBB" in symbol:
-                continue
-            if symbol in active_symbols:
-                continue
-            if symbol not in open_markets:
-                continue
-            if self._is_blacklisted(symbol):
-                continue
-
-            try:
-                price_change = float(t.get("priceChangePercent", 0))
-                volume_24h = float(t.get("quoteVolume", 0))
-                last_price = float(t.get("lastPrice", 0))
-                low_price = float(t.get("lowPrice", 0))
-            except (ValueError, TypeError):
-                continue
-
-            if volume_24h < self.config.min_volume_24h:
-                continue
-            # Only coins that dropped significantly
-            if price_change > self.config.bearish_drop_threshold:
-                continue
-
-            # Bounce from low must be strong
-            if low_price > 0 and last_price > low_price:
-                bounce_pct = (
-                    (last_price - low_price) / low_price
-                ) * 100
-                if bounce_pct >= self.config.bearish_bounce_min:
-                    candidates.append({
-                        "symbol": symbol,
-                        "drop": price_change,
-                        "bounce": bounce_pct,
-                        "volume": volume_24h,
-                    })
-
-        # Sort by bounce strength
-        candidates.sort(key=lambda x: x["bounce"], reverse=True)
-
-        slots = self.config.max_concurrent_trades - len(active)
-        max_per_cycle = self.config.max_trades_per_cycle
-        pre_candidates = candidates[:min(slots, max_per_cycle * 2)]
-
-        # Confirm with klines: recent recovery in 5min timeframe
-        confirmed = []
-        for c in pre_candidates:
-            if len(confirmed) >= max_per_cycle:
-                break
-            kline = await self._analyze_klines(c["symbol"])
-            if kline and kline["recent_change"] > 0.3:
-                c["kline"] = kline
-                c["strength"] = (
-                    "strong" if c["bounce"] >= 2.0 else "normal"
-                )
-                confirmed.append(c)
-
-        if confirmed:
-            desc = ", ".join(
-                f"{c['symbol']} {c['drop']:.1f}% "
-                f"bounce+{c['bounce']:.1f}%"
-                for c in confirmed
-            )
-            logger.info(f"Bearish dip-buy V2: {desc}")
-
-        return confirmed
+        return []
 
     async def execute_bearish_scalp(
         self, symbol: str, strength: str = "normal"
     ) -> Optional[dict]:
-        """Buy a confirmed dip bounce."""
-        if not self.config:
-            return None
-
-        active = self.get_active_positions()
-        if len(active) >= self.config.max_concurrent_trades:
-            return None
-
-        if strength == "strong":
-            amt = self.config.amount_per_trade_strong
-        else:
-            amt = self.config.amount_per_trade
-
-        # Accumulation
-        reentry_n = self._reentry_count.get(symbol, 0)
-        if self.config.accumulation_enabled and reentry_n >= 2:
-            amt = min(amt * 1.5, 75.0)
-
-        result = await trading_engine.buy_with_quote(
-            symbol, amt, StrategyType.SMART_TRADE
-        )
-        if not result:
-            self._log_activity(
-                "FALHA DIP", symbol, "Ordem rejeitada"
-            )
-            return None
-
-        position = ScalpPosition(
-            id=f"bear_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
-            symbol=symbol,
-            entry_price=result.price,
-            quantity=result.quantity,
-            amount_quote=amt,
-            highest_price=result.price,
-            signal_strength=strength,
-            momentum_score=0,
-            trailing_active=False,
-            created_at=datetime.now(UTC).isoformat(),
-        )
-        self.positions.append(position)
-
-        label = "FORTE" if strength == "strong" else "NORMAL"
-        self._log_activity(
-            f"COMPRA DIP [{label}]", symbol,
-            f"${amt:.0f} @ {result.price:.6f}"
-        )
-        self._trade_stats["total_trades"] += 1
-        return position.model_dump()
+        return None
 
 
 scalping_strategy = ScalpingStrategy()

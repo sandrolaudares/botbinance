@@ -44,8 +44,8 @@ async def lifespan(app: FastAPI):
         logger.info("Live trading auto-activated")
         scalp_config = ScalpConfig(
             active=True, quote_asset="USDT",
-            amount_per_trade=30.0, amount_per_trade_strong=50.0,
-            max_concurrent_trades=15, bearish_enabled=True,
+            amount_per_trade=20.0, amount_per_trade_strong=35.0,
+            max_concurrent_trades=5, bearish_enabled=False,
         )
         await scalping_strategy.setup(scalp_config)
         logger.info(
@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
 
     # Start scheduler (scalping + breakout only)
     scheduler.add_job(
-        scheduled_scalping_cycle, "interval", seconds=45, id="scalping"
+        scheduled_scalping_cycle, "interval", seconds=60, id="scalping"
     )
     scheduler.add_job(
         scheduled_breakout_cycle, "interval", seconds=30, id="breakout"
