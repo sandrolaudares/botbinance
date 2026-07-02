@@ -32,32 +32,32 @@ class ScalpConfig(BaseModel):
 
     active: bool = False
     quote_asset: str = "USDT"
-    # Position sizing - smaller with wider stops = same risk, fewer SL hits
-    amount_per_trade: float = 20.0
-    amount_per_trade_strong: float = 35.0
+    # Position sizing - balanced for more trades
+    amount_per_trade: float = 15.0
+    amount_per_trade_strong: float = 25.0
     # Exit - NO hard TP, only trailing. Wider SL to avoid noise.
-    stop_loss_percent: float = 2.0  # Wider SL = fewer false triggers
-    trailing_activation: float = 1.5  # Trail activates after +1.5%
-    trailing_percent: float = 1.0  # 1% trail distance (wider = less whipsaw)
+    stop_loss_percent: float = 1.5  # Balanced SL
+    trailing_activation: float = 1.0  # Trail activates earlier at +1%
+    trailing_percent: float = 0.6  # Tighter trail to lock in profits faster
     # Time management
-    max_hold_minutes: int = 180  # 3 hours max
-    stale_exit_minutes: int = 60  # Exit if flat after 1 hour
+    max_hold_minutes: int = 90  # 1.5 hours max - free capital faster
+    stale_exit_minutes: int = 30  # Exit faster if flat
     stale_exit_threshold: float = 0.3  # Less than 0.3% = flat
-    # Capacity - concentrated
-    max_concurrent_trades: int = 5  # Fewer = more focused
-    max_trades_per_cycle: int = 2  # Max 2 new entries per cycle
-    cycle_seconds: int = 60  # 1 minute cycles
+    # Capacity - more positions for more opportunities
+    max_concurrent_trades: int = 20
+    max_trades_per_cycle: int = 4  # Up to 4 new entries per cycle
+    cycle_seconds: int = 45  # Faster cycles
     # Signal filters - VERY strict
-    min_volume_24h: float = 300000.0  # Liquid pairs ($300k+)
+    min_volume_24h: float = 150000.0  # More pairs eligible ($150k+)
     min_momentum_score: int = 3  # Need 3+/6 with all other protections
     min_price_change_5min: float = 0.5  # Recent move in klines
     min_volume_spike: float = 2.0  # Volume above average
-    max_price_change_24h: float = 15.0  # Don't chase parabolic moves
+    max_price_change_24h: float = 20.0  # Allow stronger moves
     # Macro filter
     btc_filter_enabled: bool = True  # Skip all buys if BTC falling
     btc_min_change_1h: float = -1.0  # BTC must not be down >1% in 1h
     # Risk management
-    blacklist_minutes: int = 120  # 2h cooldown per symbol after exit
+    blacklist_minutes: int = 45  # Shorter cooldown for faster re-entry
     daily_loss_limit: float = 40.0  # Pause after $40 daily loss
     pause_hours: int = 4  # Hours to pause after loss limit
     # Re-entry
