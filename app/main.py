@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
+from app.models.trading import StrategyType
 from app.services.binance_client import binance_client
 from app.services.trading_engine import trading_engine
 from app.strategies.breakout import BreakoutConfig, breakout_strategy
@@ -44,7 +45,7 @@ async def lifespan(app: FastAPI):
         logger.info("Live trading auto-activated")
         scalp_config = ScalpConfig(
             active=True, quote_asset="USDT",
-            amount_per_trade=15.0, amount_per_trade_strong=25.0,
+            amount_per_trade=40.0, amount_per_trade_strong=60.0,
             max_concurrent_trades=20, bearish_enabled=False,
         )
         await scalping_strategy.setup(scalp_config)
@@ -365,6 +366,28 @@ async def redeem_all_earn():
 
 
 # ---- Scalping (New Coin Listings + Momentum) ----
+
+
+@app.post("/api/scalping/boost")
+async def boost_scalping_position(symbol: str, amount: float = 25.0):
+    """Buy more of a symbol to increase an existing scalping position."""
+    symbol = symbol.upper()
+    if not symbol.endswith("USDT"):
+        symbol = f"{symbol}USDT"
+
+    result = await trading_engine.buy_with_quote(
+        symbol, amount, StrategyType.SMART_TRADE
+    )
+    if not result:
+        return {"error": f"Failed to buy {symbol}", "status": "error"}
+
+    return {
+        "status": "success",
+        "symbol": symbol,
+        "quantity": result.quantity,
+        "price": result.price,
+        "amount_usdt": amount,
+    }
 
 
 @app.post("/api/scalping/activate")
