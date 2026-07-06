@@ -38,7 +38,11 @@ class ScalpConfig(BaseModel):
     # Exit - NO hard TP, only trailing. Wider SL to avoid noise.
     stop_loss_percent: float = 1.5  # Balanced SL
     trailing_activation: float = 1.0  # Trail activates earlier at +1%
-    trailing_percent: float = 0.6  # Tighter trail to lock in profits faster
+    trailing_percent: float = 0.6  # Tight trail for normal scalps
+    # Tiered/dynamic trailing - let big movers RUN
+    runner_gain_threshold: float = 3.0  # Above this % = "runner" mode
+    runner_trailing_percent: float = 4.0  # Wide trail for runners
+    runner_trail_factor: float = 0.25  # Trail scales: peak_gain * factor
     # Time management
     max_hold_minutes: int = 90  # 1.5 hours max - free capital faster
     stale_exit_minutes: int = 30  # Exit faster if flat
@@ -47,12 +51,17 @@ class ScalpConfig(BaseModel):
     max_concurrent_trades: int = 20
     max_trades_per_cycle: int = 4  # Up to 4 new entries per cycle
     cycle_seconds: int = 45  # Faster cycles
-    # Signal filters - VERY strict
+    # Signal filters
     min_volume_24h: float = 150000.0  # More pairs eligible ($150k+)
     min_momentum_score: int = 3  # Need 3+/6 with all other protections
     min_price_change_5min: float = 0.5  # Recent move in klines
     min_volume_spike: float = 2.0  # Volume above average
-    max_price_change_24h: float = 20.0  # Allow stronger moves
+    max_price_change_24h: float = 90.0  # Allow strong movers/pumps
+    # Pump detection - catch explosive movers early
+    pump_detection_enabled: bool = True
+    pump_min_5min_change: float = 3.0  # 3%+ in last 15min = explosive
+    pump_min_vol_spike: float = 3.0  # 3x volume spike
+    pump_max_from_high: float = 2.0  # Don't buy >2% below the peak
     # Macro filter
     btc_filter_enabled: bool = True  # Skip all buys if BTC falling
     btc_min_change_1h: float = -1.0  # BTC must not be down >1% in 1h
@@ -79,6 +88,7 @@ class ScalpPosition(BaseModel):
     trailing_active: bool = False
     signal_strength: str = "normal"
     momentum_score: int = 0
+    is_pump: bool = False
     status: str = "ACTIVE"
     reason: str = ""
     created_at: str = ""
@@ -343,6 +353,16 @@ class ScalpingStrategy:
             )
             is_pullback_entry = 0.1 < from_high < 0.5  # Slight dip
 
+            # Pump detection: explosive recent move + big volume spike,
+            # and we're catching it near the peak (not after it dumped).
+            is_pump = False
+            if self.config and self.config.pump_detection_enabled:
+                is_pump = (
+                    recent_change >= self.config.pump_min_5min_change
+                    and vol_ratio >= self.config.pump_min_vol_spike
+                    and from_high <= self.config.pump_max_from_high
+                )
+
             return {
                 "recent_change": recent_change,
                 "vol_ratio": vol_ratio,
@@ -350,6 +370,7 @@ class ScalpingStrategy:
                 "accelerating": accelerating,
                 "price_position": price_position,
                 "is_pullback_entry": is_pullback_entry,
+                "is_pump": is_pump,
                 "last_price": closes[-1],
             }
         except Exception as e:
@@ -503,14 +524,22 @@ class ScalpingStrategy:
                 kline,
             )
 
-            if score >= self.config.min_momentum_score:
+            is_pump = kline.get("is_pump", False)
+            # Pumps qualify even at slightly lower score (they move fast)
+            if score >= self.config.min_momentum_score or is_pump:
                 c["kline"] = kline
                 c["score"] = score
-                c["strength"] = "strong" if score >= 5 else "normal"
+                c["is_pump"] = is_pump
+                c["strength"] = (
+                    "strong" if (score >= 5 or is_pump) else "normal"
+                )
                 confirmed.append(c)
 
-        # Sort by score (best first)
-        confirmed.sort(key=lambda x: x["score"], reverse=True)
+        # Sort: pumps first, then by score (best first)
+        confirmed.sort(
+            key=lambda x: (x.get("is_pump", False), x["score"]),
+            reverse=True,
+        )
 
         if confirmed:
             desc = ", ".join(
@@ -560,7 +589,8 @@ class ScalpingStrategy:
         return position.model_dump()
 
     async def execute_momentum_scalp(
-        self, symbol: str, strength: str = "normal", score: int = 4
+        self, symbol: str, strength: str = "normal", score: int = 4,
+        is_pump: bool = False,
     ) -> Optional[dict]:
         """Execute entry on qualified momentum signal."""
         if not self.config:
@@ -593,13 +623,19 @@ class ScalpingStrategy:
             highest_price=result.price,
             signal_strength=strength,
             momentum_score=score,
+            is_pump=is_pump,
             trailing_active=False,
             created_at=datetime.now(UTC).isoformat(),
         )
         self.positions.append(position)
         self._trade_stats["total_trades"] += 1
 
-        label = f"FORTE {score}/6" if strength == "strong" else f"{score}/6"
+        if is_pump:
+            label = f"PUMP {score}/6"
+        elif strength == "strong":
+            label = f"FORTE {score}/6"
+        else:
+            label = f"{score}/6"
         self._log_activity(
             f"COMPRA [{label}]", symbol,
             f"${amt:.0f} @ {result.price:.6f} "
@@ -633,20 +669,27 @@ class ScalpingStrategy:
         created = datetime.fromisoformat(pos.created_at)
         elapsed_min = (datetime.now(UTC) - created).total_seconds() / 60
 
+        # Peak gain so far (how far it ran from entry)
+        peak_gain = (
+            (pos.highest_price - pos.entry_price) / pos.entry_price
+        ) * 100
+        is_runner = peak_gain >= self.config.runner_gain_threshold
+
         # 1. Stop Loss (wider = less noise triggers)
         if pnl_pct <= -self.config.stop_loss_percent:
             self._add_to_blacklist(pos.symbol)
             await self._close_position(pos, current_price, "STOP_LOSS")
             return
 
-        # 2. Max hold timeout
-        if elapsed_min >= self.config.max_hold_minutes:
+        # 2. Max hold timeout - runners are exempt (let winners run)
+        if not is_runner and elapsed_min >= self.config.max_hold_minutes:
             await self._close_position(pos, current_price, "TIMEOUT")
             return
 
         # 3. Stale exit (flat for too long)
         if (
-            elapsed_min >= self.config.stale_exit_minutes
+            not is_runner
+            and elapsed_min >= self.config.stale_exit_minutes
             and abs(pnl_pct) < self.config.stale_exit_threshold
         ):
             await self._close_position(pos, current_price, "STALE")
@@ -663,12 +706,21 @@ class ScalpingStrategy:
                 f"+{pnl_pct:.2f}% → trailing ativado"
             )
 
-        # 5. Trailing stop trigger
+        # 5. Trailing stop trigger - dynamic distance.
+        # Small gains: tight trail to lock profit. Runners/pumps: WIDE
+        # trail that scales with the peak so they can keep climbing.
         if pos.trailing_active and pos.highest_price > pos.entry_price:
             drop_from_peak = (
                 (pos.highest_price - current_price) / pos.highest_price
             ) * 100
-            if drop_from_peak >= self.config.trailing_percent:
+            if is_runner:
+                trail_dist = max(
+                    self.config.runner_trailing_percent,
+                    peak_gain * self.config.runner_trail_factor,
+                )
+            else:
+                trail_dist = self.config.trailing_percent
+            if drop_from_peak >= trail_dist:
                 if pnl_pct > 0.5:  # Only sell if still in profit
                     await self._close_position(
                         pos, current_price, "TRAILING_TP"
@@ -854,7 +906,8 @@ class ScalpingStrategy:
             )
         for signal in momentum_signals:
             await self.execute_momentum_scalp(
-                signal["symbol"], signal["strength"], signal["score"]
+                signal["symbol"], signal["strength"], signal["score"],
+                signal.get("is_pump", False),
             )
 
         # Monitor existing positions
